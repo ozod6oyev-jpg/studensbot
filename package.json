@@ -12,10 +12,11 @@
     "bot:webhook": "bun bot/index.ts webhook",
     "bot:poll": "bun bot/index.ts poll",
     "fonts:fetch": "bun scripts/fetch-fonts.ts",
-    "check": "bun scripts/check-render.ts && bun scripts/check-bot.ts && bun scripts/check-font-sheet.ts",
+    "check": "bun scripts/check-render.ts && bun scripts/check-bot.ts && bun scripts/check-font-sheet.ts && bun scripts/check-deploy.ts",
     "check:render": "bun scripts/check-render.ts",
     "check:bot": "bun scripts/check-bot.ts",
-    "check:sheet": "bun scripts/check-font-sheet.ts"
+    "check:sheet": "bun scripts/check-font-sheet.ts",
+    "check:deploy": "bun scripts/check-deploy.ts"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",

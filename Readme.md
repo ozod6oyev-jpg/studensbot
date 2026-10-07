@@ -174,8 +174,11 @@ Qisqacha:
 sudo bash deploy/deploy.sh                       # loyiha shu papkada
 sudo bash deploy/deploy.sh https://github.com/siz/daftar-bot.git   # git'dan
 sudo bash deploy/deploy.sh --token-file=/root/token.txt            # tokenni fayldan o'qib o'rnatish
-git -C /opt/daftar-bot pull && sudo systemctl restart daftar-bot   # yangilash
+cd ~/daftar-bot && git pull && sudo bash deploy/deploy.sh   # yangilash (kod papkasida)
 ```
+
+> `/opt/daftar-bot` — **o'rnatilgan** nusxa (`.git` yo'q), shuning uchun u yerda `git pull`
+> xato beradi: kod manba papkada yangilanadi. Batafsil: [deploy/README.md](deploy/README.md).
 
 Qo'lda ishga tushirish variantlari:
 
@@ -204,10 +207,16 @@ Qo'lda ishga tushirish variantlari:
 ## Tekshiruvlar
 
 ```bash
-bun run check          # ikkala tekshiruv ketma-ket
+bun run check          # hamma tekshiruv ketma-ket
 bun run check:render   # namuna varaqalar (PNG), matematika geometriyasi, sahifalash
 bun run check:bot      # bot: soxta Telegram server bilan matn → rasm → yuborish oqimi (token kerak emas)
+bun run check:sheet    # shriftlar ro'yxati rasmi (nomlar o'z shriftida, ingichka varaqa)
+bun run check:deploy   # deploy.sh: clone → .env saqlanishi → git pull → yangilanish (root kerak)
 ```
+
+`check:deploy` haqiqiy `deploy/deploy.sh` ni `/tmp` ichida, stub buyruqlar va lokal git
+repozitoriy bilan sinaydi; shuning uchun u **root** huquqini talab qiladi (skriptning o'zi
+ham root ostida ishlaydi).
 
 `check:render` namunalarni `/tmp/daftar-check/` papkasiga yozadi va natijani ASCII ko'rinishida
 chiqaradi — rasm haqiqatan daftarga o'xshashini shu yerda ko'rish mumkin.

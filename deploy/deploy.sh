@@ -44,6 +44,22 @@ SERVICE_NAME="daftar-bot"
 UNIT_SOURCE="${SCRIPT_DIR}/daftar-bot.service"
 UNIT_TARGET="/etc/systemd/system/${SERVICE_NAME}.service"
 
+# Skript o'rnatilgan papkaning o'zidan ishga tushirilsa va git manzili berilgan
+# bo'lsa, pastda shu papka tozalanadi — skript faylining o'zi ham o'chib qolib,
+# keyingi qatorlari o'qilmay qoladi. Shuning uchun o'zimizni /tmp dagi xavfsiz
+# nusxadan qayta ishga tushiramiz (nusxa kichik, o'zi o'chib ketmaydi).
+if [ -n "$REMOTE_URL" ]; then
+  case "$SCRIPT_DIR" in
+    "$APP_DIR"|"$APP_DIR"/*)
+      info "Skript ${APP_DIR} ichida turgani uchun xavfsiz nusxadan qayta ishga tushiriladi"
+      SAFE_DEPLOY_DIR="$(mktemp -d)"
+      cp -a "${SCRIPT_DIR}/." "${SAFE_DEPLOY_DIR}/"
+      cd /
+      exec bash "${SAFE_DEPLOY_DIR}/deploy.sh" "$@"
+      ;;
+  esac
+fi
+
 # --------------------------- oldindan tekshiruv ---------------------------
 
 info "Daftar Bot o'rnatilmoqda"
@@ -134,13 +150,34 @@ ok "'daftar' foydalanuvchisi Bun'ni ishga tushira oladi"
 
 info "Loyiha fayllari ${APP_DIR} ga joylashtirilmoqda"
 if [ -n "$REMOTE_URL" ]; then
+  # Git buyruqlari `daftar` foydalanuvchisi nomidan bajariladi: papka unga
+  # tegishli, aks holda root sifatida ishlaganda git "dubious ownership"
+  # xatosi bilan to'xtaydi.
   if [ -d "${APP_DIR}/.git" ]; then
-    git -C "$APP_DIR" pull --ff-only
+    runuser -u daftar -- git -C "$APP_DIR" remote set-url origin "$REMOTE_URL" 2>/dev/null || true
+    runuser -u daftar -- git -C "$APP_DIR" pull --ff-only
     ok "Yangilandi (git pull)"
   else
+    # Muammoli holat: papka ilgari `rsync` bilan joylashtirilgan (unda .git
+    # yo'q), ammo ichida .env — ya'ni bot tokeni — bor. Tozalashdan oldin uni
+    # vaqtincha saqlab olamiz, aks holda token yo'qolib qoladi.
+    ENV_BACKUP=""
+    if [ -f "${APP_DIR}/.env" ]; then
+      ENV_BACKUP="$(mktemp)"
+      cp -p "${APP_DIR}/.env" "$ENV_BACKUP"
+      ok "Mavjud .env vaqtincha saqlab olindi"
+    fi
+    CLONE_DIR="$(mktemp -d)"
+    git clone --depth 1 "$REMOTE_URL" "${CLONE_DIR}/repo"
     # git clone bo'sh papkani talab qiladi — mavjud narsalarni tozalaymiz.
     find "$APP_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-    git clone --depth 1 "$REMOTE_URL" "$APP_DIR"
+    cp -a "${CLONE_DIR}/repo/." "$APP_DIR/"
+    rm -rf "$CLONE_DIR"
+    if [ -n "$ENV_BACKUP" ]; then
+      cp -p "$ENV_BACKUP" "${APP_DIR}/.env"
+      rm -f "$ENV_BACKUP"
+      ok ".env qaytarildi — bot tokeni saqlanib qoldi"
+    fi
     ok "Yuklab olindi (git clone)"
   fi
 else

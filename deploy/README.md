@@ -37,7 +37,13 @@ rsync -av --exclude node_modules --exclude .env ./ sizning_foydalanuvchi@SERVER_
 ```
 
 > ⚠️ `.env` faylini serverga ko'chirmang — token serverni o'zida alohida
-> saqlanadi (11-bosqichga qarang).
+> saqlanadi (4-bosqichga qarang).
+
+> ℹ️ Bu papka — **manba**, ya'ni kod nusxasi. `deploy.sh` esa loyihani
+> `/opt/daftar-bot` ga **o'rnatadi**, va u yerda `.git` bo'lmaydi (nusxa
+> `rsync` bilan ko'chiriladi). Shuning uchun serverdagi
+> `/opt/daftar-bot` ichida `git pull` yozish xato beradi — kodni doim shu
+> manba papkada yangilang (quyidagi "Yangilash" bo'limi).
 
 ## 3. O'rnatish
 
@@ -130,14 +136,34 @@ sudo systemctl disable daftar-bot    # avtomatik ishga tushishni o'chirish
 
 ## Yangilash (yangi versiya)
 
+Kodni **manba papkada** yangilab, keyin o'rnatish skriptini ishga tushiring:
+
 ```bash
-cd ~/daftar-bot && git pull          # yoki: sudo bash deploy/deploy.sh https://github.com/...
-sudo bash deploy/deploy.sh           # git manzili bilan chaqirilgan bo'lsa: shu buyruq ham yetadi
+cd ~/daftar-bot                     # kodning manba nusxasi (klon)
+git pull
+sudo bash deploy/deploy.sh          # /opt/daftar-bot ni yangilaydi va xizmatni qayta ishga tushiradi
 ```
+
+Manba nusxa yo'q bo'lsa (kod bir marta yuklab olingan bo'lsa), git manzilini
+o'zingiz bering — skript `/opt/daftar-bot` ni klon qiladi va endi u yerda ham
+`git pull` ishlaydi:
+
+```bash
+cd /root
+git clone https://github.com/sizning_login/daftar-bot.git daftar-src
+cd daftar-src
+sudo bash deploy/deploy.sh https://github.com/sizning_login/daftar-bot.git
+```
+
+> `/opt/daftar-bot` — o'rnatilgan nusxa: `git pull` ni **o'sha papkada** yozish
+> faqat yuqoridagi klon bajarilgan bo'lsa ishlaydi. Klon qilinmagan bo'lsa
+> `fatal: not a git repository` xatosi chiqadi — bu normal holat, kod manba
+> papkada yangilanadi.
 
 `deploy.sh` loyihani yangilab, bog'liqliklarni o'rnatadi va xizmatni qayta
 ishga tushiradi. `.env` va `/var/lib/daftar-bot` (chat sozlamalari va daftarlar:
-`settings.json`, `notebooks.json`) saqlanib qoladi.
+`settings.json`, `notebooks.json`) **hech qachon** o'chirilmaydi — papka klon
+bilan almashtirilganda ham token saqlab qolinadi.
 
 ## Webhook rejimiga o'tish (ixtiyoriy)
 
@@ -247,6 +273,7 @@ qatorini domeningizga o'zgartiring.
 | `401 Unauthorized` | Token xato yoki bekor qilingan — `@BotFather` dan yangisini olib `.env` ga yozing va xizmatni qayta ishga tushiring |
 | `409 Conflict` | Polling va webhook birga ishlayapti — bittasini to'xtating (`delete-webhook`) |
 | Xizmat ishga tushmayapti | `journalctl -u daftar-bot -n 50` — ko'pincha `.env` da token yo'q yoki Bun yo'li xato |
+| `fatal: not a git repository` (`/opt/daftar-bot` ichida `git pull`) | Bu o'rnatilgan nusxa, manba emas — kodni manba papkada yangilang (`cd ~/daftar-bot && git pull`), keyin `sudo bash deploy/deploy.sh` |
 | `can't cd to /opt/daftar-bot` | `chown -R daftar:daftar /opt/daftar-bot` |
 | Sozlamalar yoki daftarlar saqlanmayapti | `/var/lib/daftar-bot` papkasi `daftar` foydalanuvchisiga tegishli bo'lishi kerak (`settings.json`, `notebooks.json`) |
 | Rasm chiqmayapti | Matn yuborilganini va ochiq daftar borligini tekshiring: matn faqat tanlangan daftarga yoziladi, daftar bo'lmasa bot yangisini yaratishni aytadi |
