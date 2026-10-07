@@ -141,13 +141,15 @@ Qisqacha:
 ```bash
 sudo bash deploy/deploy.sh                       # loyiha shu papkada
 sudo bash deploy/deploy.sh https://github.com/siz/daftar-bot.git   # git'dan
+sudo bash deploy/deploy.sh --token-file=/root/token.txt            # tokenni fayldan o'qib o'rnatish
 git -C /opt/daftar-bot pull && sudo systemctl restart daftar-bot   # yangilash
 ```
 
 Qo'lda ishga tushirish variantlari:
 
 - **Studio** — statik sayt. `bun run build` natijasida `dist/` papkasi hosil bo'ladi; uni istalgan statik
-  hostingga (yoki Freebuff hostingiga) qo'yish mumkin. Backend talab qilinmaydi.
+  hostingga (yoki Freebuff hostingiga) qo'yish mumkin. Backend talab qilinmaydi. nginx bilan shu serverning
+  o'zida ko'rsatish misoli `deploy/README.md` da.
 - **Bot** — doimiy ishlaydigan Node/Bun jarayoni kerak (`bun bot/index.ts poll`). Serverless muhitda
   **webhook** rejimidan foydalaning: `bun bot/index.ts webhook https://domen.example`. Telegram webhook
   uchun HTTPS va ochiq domen shart.

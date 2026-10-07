@@ -1,4 +1,8 @@
-import opentype from "opentype.js";
+// Nomlangan import (`import * as`): opentype.js ning ESM nusxasi
+// (`dist/opentype.mjs`) faqat nomlangan eksport beradi, shuning uchun
+// "default" import ishlab chiqarish (Rollup) build'ida yiqiladi.
+// Bu shakl Vite dev, Rollup build va Bun'da bir xil ishlaydi.
+import * as opentype from "opentype.js";
 import type { Contour, FontId, Vec2 } from "./types";
 
 export interface HandwritingFont {

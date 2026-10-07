@@ -78,6 +78,14 @@ sudo nano /opt/daftar-bot/.env
 sudo systemctl restart daftar-bot
 ```
 
+Faylni qo'lda tahrirlashni istamasangiz, tokenni fayldan o'qib o'rnatish ham mumkin
+(skript qiymatni logga ham, jarayon argumentlariga ham chiqarmaydi):
+
+```bash
+sudo bash deploy/deploy.sh --token-file=/root/token.txt
+rm /root/token.txt    # ishlatib bo'lgach o'chiring
+```
+
 ## 5. Holatni tekshirish
 
 ```bash
@@ -175,21 +183,43 @@ sudo -u daftar /usr/local/bin/bun run /opt/daftar-bot/bot/index.ts delete-webhoo
 Studio — oddiy statik sayt, backend kerak emas:
 
 ```bash
+sudo apt-get install -y nginx
 cd /opt/daftar-bot
 sudo -u daftar /usr/local/bin/bun run build     # dist/ papkasi hosil bo'ladi
 ```
 
-Nginx orqali ko'rsatish:
+Nginx orqali ko'rsatish (`/etc/nginx/sites-available/daftar-studio`):
 
 ```nginx
 server {
-    listen 80;
-    server_name daftar.sizning-domen.uz;
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+
     root /opt/daftar-bot/dist;
     index index.html;
-    location / { try_files $uri /index.html; }
+
+    location / { try_files $uri $uri/ /index.html; }
+
+    location ~* \.(ttf|woff2?|js|css|png|svg)$ {
+        expires 30d;
+        access_log off;
+    }
 }
 ```
+
+Yoqish:
+
+```bash
+sudo ln -sf /etc/nginx/sites-available/daftar-studio /etc/nginx/sites-enabled/daftar-studio
+sudo rm -f /etc/nginx/sites-enabled/default     # 80-portda ikkita default_server bo'lmasin
+sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload nginx
+```
+
+Endi sahifa `http://SERVER_IP/` da ochiladi. Domen va HTTPS (certbot) uchun `server_name`
+qatorini domeningizga o'zgartiring.
+
+> Yangi versiyadan keyin `dist/` ni qayta yig'ishni unutmang: `sudo -u daftar /usr/local/bin/bun run build`.
 
 ## Muammolar
 

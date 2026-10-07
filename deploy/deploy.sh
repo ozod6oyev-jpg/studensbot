@@ -4,12 +4,27 @@
 #
 #   bash deploy.sh                              # loyiha shu papkada turgan bo'lsa
 #   bash deploy.sh https://github.com/siz/daftar-bot   # git'dan yuklab o'rnatish
+#   bash deploy.sh --token-file=/root/token.txt  # tokenni fayldan o'qib o'rnatish
 #
-# Skript idempotent: qayta ishga tushirilsa ham xavfsiz (mavjud .env va
+# Skript idempotent: qayta ishga tushirilsa ham xavfsiz (mavjud sozlamalar va
 # ma'lumotlar saqlanib qoladi, xizmat qayta ishga tushiriladi).
 set -euo pipefail
 
-REMOTE_URL="${1:-}"
+REMOTE_URL=""
+# Tokenni qo'lda fayl tahrirlamasdan kiritish uchun: --token-file=/yo'l/fayl
+TOKEN_FILE=""
+for argument in "$@"; do
+  case "$argument" in
+    --token-file=*) TOKEN_FILE="${argument#--token-file=}" ;;
+    --token-file) fail_param="--token-file=/yo'l/fayl ko'rinishida yoziladi" ;;
+    -*) fail_param="Noma'lum parametr: ${argument}" ;;
+    *) REMOTE_URL="$argument" ;;
+  esac
+done
+if [ -n "${fail_param:-}" ]; then
+  printf '\n\033[1;31mXATO: %s\033[0m\n' "$fail_param" >&2
+  exit 1
+fi
 
 # ------------------------------ yordamchilar ------------------------------
 
@@ -63,23 +78,37 @@ fi
 # -------------------------------- Bun -------------------------------------
 
 info "Bun tekshirilmoqda"
-if [ ! -x /usr/local/bin/bun ]; then
-  if command -v bun >/dev/null 2>&1; then
-    ln -sf "$(command -v bun)" /usr/local/bin/bun
-    ok "Mavjud bun /usr/local/bin/bun ga bog'landi"
-  else
-    ok "Bun o'rnatilmoqda (rasmiy skript)"
-    curl -fsSL https://bun.sh/install | bash
-    if [ -x "${HOME}/.bun/bin/bun" ]; then
-      ln -sf "${HOME}/.bun/bin/bun" /usr/local/bin/bun
-      ok "Bun o'rnatildi: $(/usr/local/bin/bun --version)"
-    else
-      fail "Bun o'rnatilmadi. Qo'lda o'rnatib (https://bun.sh) qayta urinib ko'ring."
-    fi
-  fi
+
+# Rasmiy skript Bun'ni foydalanuvchi uy papkasiga (~/.bun/bin) o'rnatadi.
+# Uni /usr/local/bin/bun ga *symlink* qilib bo'lmaydi: /root kabi uy papkalari
+# boshqa foydalanuvchilarga yopiq, shuning uchun `daftar` xizmati
+# "runuser: failed to execute /usr/local/bin/bun: Permission denied" bilan
+# yiqiladi. Shuning uchun haqiqiy nusxani qo'yamiz.
+BUN_SOURCE=""
+if [ -x "${HOME}/.bun/bin/bun" ]; then
+  BUN_SOURCE="${HOME}/.bun/bin/bun"
+elif command -v bun >/dev/null 2>&1 && [ -x "$(command -v bun)" ]; then
+  BUN_SOURCE="$(command -v bun)"
 else
-  ok "Bun mavjud: $(/usr/local/bin/bun --version)"
+  ok "Bun o'rnatilmoqda (rasmiy skript)"
+  curl -fsSL https://bun.sh/install | bash
+  [ -x "${HOME}/.bun/bin/bun" ] || fail "Bun o'rnatilmadi. Qo'lda o'rnatib (https://bun.sh) qayta urinib ko'ring."
+  BUN_SOURCE="${HOME}/.bun/bin/bun"
 fi
+
+# Symlinkni har doim haqiqiy faylga almashtiramiz (manba yangiroq bo'lsa yangilaymiz).
+BUN_BIN="$(readlink -f "$BUN_SOURCE")"
+[ -x "$BUN_BIN" ] || fail "Bun fayli topilmadi: ${BUN_SOURCE}"
+
+if [ "$BUN_BIN" = "/usr/local/bin/bun" ]; then
+  chmod 755 /usr/local/bin/bun
+elif [ -L /usr/local/bin/bun ] || [ ! -f /usr/local/bin/bun ] || [ "$BUN_SOURCE" -nt /usr/local/bin/bun ]; then
+  rm -f /usr/local/bin/bun
+  install -m 755 "$BUN_BIN" /usr/local/bin/bun
+fi
+chmod 755 /usr/local/bin/bun
+/usr/local/bin/bun --version >/dev/null 2>&1 || fail "/usr/local/bin/bun ishga tushmadi."
+ok "Bun tayyor: $(/usr/local/bin/bun --version)"
 
 # ------------------------- foydalanuvchi va papkalar ----------------------
 
@@ -94,6 +123,12 @@ fi
 mkdir -p "$DATA_DIR" "$APP_DIR"
 chown daftar:daftar "$DATA_DIR"
 ok "Ma'lumot papkasi: ${DATA_DIR}"
+
+# Eng muhim tekshiruv: xizmat foydalanuvchisi Bun'ni haqiqatan ishga
+# tushira olishi kerak (Bun boshqa foydalanuvchining yopiq papkasida bo'lsa
+# shu yerda to'xtaymiz, keyin emas).
+runuser -u daftar -- /usr/local/bin/bun --version >/dev/null 2>&1 || fail "'daftar' foydalanuvchisi /usr/local/bin/bun ni ishga tushira olmayapti."
+ok "'daftar' foydalanuvchisi Bun'ni ishga tushira oladi"
 
 # ------------------------------ loyiha fayllari ---------------------------
 
@@ -125,15 +160,19 @@ chown -R daftar:daftar "$APP_DIR"
 # ------------------------------ bog'liqliklar -----------------------------
 
 info "Bog'liqliklar o'rnatilmoqda (bun install)"
-(cd "$APP_DIR" && runuser -u daftar -- /usr/local/bin/bun install --production=false)
+# `bun install` standart holatda hamma bog'liqlikni, shu jumladan
+# devDependencies'ni o'rnatadi (bot va tekshiruv skriptlari shunga tayanadi).
+# `--production=false` yozilmaydi: yangi Bun versiyalarida u qiymat qabul
+# qilmaydigan bayroqqa aylangan va xato beradi.
+(cd "$APP_DIR" && runuser -u daftar -- /usr/local/bin/bun install)
 ok "Bog'liqliklar tayyor"
 
 # --------------------------------- .env -----------------------------------
 
-info "Maxfiy kalitlar fayli (.env)"
+info "Maxfiy kalitlar fayli"
 ENV_FILE="${APP_DIR}/.env"
 if [ -f "$ENV_FILE" ]; then
-  ok "Mavjud .env saqlanib qoldi (ustidan yozilmaydi)"
+  ok "Mavjud sozlamalar fayli saqlanib qoldi (ustidan yozilmaydi)"
 else
   cat > "$ENV_FILE" <<'ENV_TEMPLATE'
 # Daftar Bot sozlamalari. Bu fayl hech qachon git'ga qo'shilmaydi.
@@ -151,7 +190,32 @@ TELEGRAM_BOT_TOKEN=
 ENV_TEMPLATE
   chown daftar:daftar "$ENV_FILE"
   chmod 600 "$ENV_FILE"
-  ok "Namuna .env yaratildi (chmod 600)"
+  ok "Namuna sozlamalar fayli yaratildi (chmod 600)"
+fi
+
+# Tokenni fayldan o'rnatish (qiymat jarayon argumentlarida ham, logda ham
+# ko'rinmaydi: uni awk ichida fayldan o'qiymiz).
+if [ -n "$TOKEN_FILE" ]; then
+  [ -f "$TOKEN_FILE" ] || fail "Token fayli topilmadi: ${TOKEN_FILE}"
+  TOKEN_TMP="$(mktemp)"
+  if grep -q '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE"; then
+    awk -v tf="$TOKEN_FILE" '
+      BEGIN { while ((getline line < tf) > 0) { gsub(/[[:space:]]/, "", line); if (line != "") tok = line } }
+      /^TELEGRAM_BOT_TOKEN=/ { print "TELEGRAM_BOT_TOKEN=" tok; done = 1; next }
+      { print }
+      END { if (!done) print "TELEGRAM_BOT_TOKEN=" tok }
+    ' "$ENV_FILE" > "$TOKEN_TMP"
+  else
+    cat "$ENV_FILE" > "$TOKEN_TMP"
+    awk -v tf="$TOKEN_FILE" '
+      BEGIN { while ((getline line < tf) > 0) { gsub(/[[:space:]]/, "", line); if (line != "") tok = line }
+              print "TELEGRAM_BOT_TOKEN=" tok }
+    ' >> "$TOKEN_TMP"
+  fi
+  mv "$TOKEN_TMP" "$ENV_FILE"
+  chown daftar:daftar "$ENV_FILE"
+  chmod 600 "$ENV_FILE"
+  ok "Token fayldan o'rnatildi (chmod 600): ${TOKEN_FILE}"
 fi
 
 # ------------------------------- xizmat -----------------------------------
@@ -167,12 +231,13 @@ ok "Xizmat yoqildi va ishga tushirildi: ${SERVICE_NAME}"
 
 if grep -qE '^TELEGRAM_BOT_TOKEN=[^[:space:]]+' "$ENV_FILE"; then
   ok "Token o'rnatilgan — bot ishlayapti"
-else
+elif [ -z "${TOKEN_FILE:-}" ]; then
   warn "TELEGRAM_BOT_TOKEN hali bo'sh!"
   printf '\n    1) @BotFather dan tokenni oling.\n'
   printf '    2) Faylni tahrirlang:  nano %s\n' "$ENV_FILE"
   printf '       (TELEGRAM_BOT_TOKEN= qatoriga tokenni yozing)\n'
-  printf '    3) Xizmatni qayta ishga tushiring:  systemctl restart %s\n\n' "$SERVICE_NAME"
+  printf '    3) Xizmatni qayta ishga tushiring:  systemctl restart %s\n' "$SERVICE_NAME"
+  printf '    Yoki:  bash deploy.sh --token-file=/root/token.txt\n\n'
 fi
 
 info "Xizmat holati"
