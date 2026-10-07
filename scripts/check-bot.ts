@@ -443,6 +443,44 @@ async function main(): Promise<void> {
       "qisqa buyruqdan keyin ham pastdagi menyu qoldi",
     );
 
+    console.log("\n=== 13-holat: yozuv sozlamalari — har biri alohida ochiladi ===");
+    send(BTN.settings);
+    await waitFor(() => mock.texts.filter((entry) => entry.text.startsWith("⚙️ Sozlamalar")).length > 0, 15000, "sozlamalar");
+    send(BTN.writing);
+    const writingOf = (): ReceivedText | undefined =>
+      mock.texts.filter((entry) => entry.text.startsWith("📐 Yozuv sozlamalari")).pop();
+    await waitFor(() => Boolean(writingOf()), 15000, "yozuv sozlamalari menyusi");
+    const writingKeys = keyboardLabels(writingOf()?.markup ?? "");
+    assert(
+      ["🔠 O'lcham", "〰️ Qo'l tebranishi", "📏 Qator oralig'i", "🔢 Matematika", "🖼 Yuborish turi"].every(
+        (label) => writingKeys.includes(label),
+      ),
+      `yozuv sozlamalari alohida tugmalarda (${writingKeys.length} tugma)`,
+    );
+
+    const beforeSize = mock.texts.length;
+    send("🔠 O'lcham");
+    await waitFor(() => mock.texts.length > beforeSize, 15000, "o'lcham menyusi");
+    const sizeText = mock.texts[mock.texts.length - 1].text;
+    const sizeKeys = keyboardLabels(mock.texts[mock.texts.length - 1].markup);
+    assert(
+      /o'lcham/i.test(sizeText) && /Joriy: \d+px/.test(sizeText),
+      `o'lcham sozlamasi alohida ochildi ("${sizeText.split("\n")[0]}")`,
+    );
+    assert(
+      sizeKeys.some((label) => /^(✓ )?\d+$/.test(label)),
+      `o'lcham variantlari tugma ko'rinishida (${sizeKeys.join(", ")})`,
+    );
+
+    const beforeWobble = mock.texts.length;
+    send("〰️ Qo'l tebranishi");
+    await waitFor(() => mock.texts.length > beforeWobble, 15000, "tebranish menyusi");
+    const wobbleKeys = keyboardLabels(mock.texts[mock.texts.length - 1].markup);
+    assert(
+      ["Tekis", "O'rtacha", "Jonli"].every((label) => wobbleKeys.some((key) => key.includes(label))),
+      `qo'l tebranishi darajalari alohida ochildi (${wobbleKeys.join(", ")})`,
+    );
+
     console.log(
       `\nAPI chaqiruvlari: ${["getMe", "deleteWebhook", "getUpdates", "sendChatAction", "sendPhoto", "sendDocument"]
         .map((call) => `${call}×${mock.calls.filter((item) => item === call).length}`)
