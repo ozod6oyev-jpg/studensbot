@@ -9,6 +9,12 @@ export interface PaperLayout {
   lineGap: number;
   /** Chap chegara (qizil chiziq) x koordinatasi. */
   marginLeft: number;
+  /**
+   * Qizil chegara va muqova soyasi o'ng tomonda bo'lsinmi — daftarning orqa
+   * tomoni (verso) uchun `true`. Unda chegara `width - 1 - marginLeft` da
+   * chiziladi.
+   */
+  marginOnRight?: boolean;
   marginLine: boolean;
 }
 
@@ -54,6 +60,9 @@ export function paintPaper(out: Uint8ClampedArray, layout: PaperLayout, style: N
   const { width, height } = layout;
   const cell = gridCell(style);
   const spineWidth = Math.round(width * 0.022);
+  // Orqa tomon (verso) uchun chegara va muqova soyasi oynaga aks etadi.
+  const mirrored = layout.marginOnRight === true;
+  const marginX = mirrored ? width - 1 - layout.marginLeft : layout.marginLeft;
 
   for (let y = 0; y < height; y += 1) {
     // Qog'oz rangi: mayin tebranish + chetlarda sal to'qlik (yorug'lik ta'siri).
@@ -67,8 +76,9 @@ export function paintPaper(out: Uint8ClampedArray, layout: PaperLayout, style: N
       const index = (y * width + x) * 4;
       const fiber = 1 + grain(x, y) * 0.01;
 
-      // Varaqaning chap tomonidagi mayin soyali qirra.
-      const spine = x < spineWidth ? Math.pow(1 - x / spineWidth, 1.8) : 0;
+      // Varaqaning muqova tomonidagi mayin soyali qirra (verso varaqada — o'ngda).
+      const spineDistance = mirrored ? width - 1 - x : x;
+      const spine = spineDistance < spineWidth ? Math.pow(1 - spineDistance / spineWidth, 1.8) : 0;
       const edgeX = Math.min(x, width - 1 - x) / (width * 0.5);
       const vignette = 1 - Math.min(1, edgeX * 1.8) * 0.03 - spine * 0.03;
 
@@ -90,8 +100,8 @@ export function paintPaper(out: Uint8ClampedArray, layout: PaperLayout, style: N
         b = b * (1 - strength) + GRID_RGB[2] * strength;
       }
 
-      if (layout.marginLine && Math.abs(x - layout.marginLeft) < 1.2) {
-        const strength = 0.62 * (1 - Math.abs(x - layout.marginLeft) / 1.2);
+      if (layout.marginLine && Math.abs(x - marginX) < 1.2) {
+        const strength = 0.62 * (1 - Math.abs(x - marginX) / 1.2);
         r = r * (1 - strength) + MARGIN_RGB[0] * strength;
         g = g * (1 - strength) + MARGIN_RGB[1] * strength;
         b = b * (1 - strength) + MARGIN_RGB[2] * strength;
@@ -104,11 +114,13 @@ export function paintPaper(out: Uint8ClampedArray, layout: PaperLayout, style: N
     }
   }
 
-  // Chap qirra soyasi (daftar "muqovasi" tarafi) — yumshoq, kuchli emas.
+  // Muqova tomonidagi qirra soyasi — yumshoq, kuchli emas.
+  // Verso varaqada u o'ng tomonda bo'ladi (x koordinatasi oynaga aks etadi).
   const spineEdge = Math.round(width * 0.016);
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < spineEdge; x += 1) {
-      const index = (y * width + x) * 4;
+      const targetX = mirrored ? width - 1 - x : x;
+      const index = (y * width + targetX) * 4;
       const strength = 0.34 * Math.pow(1 - x / spineEdge, 2.2);
       blend(out, index, [120, 106, 84], strength);
     }

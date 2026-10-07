@@ -2,11 +2,16 @@
  * Daftar Bot — Telegram bot runtime.
  *
  * Foydalanuvchi matn yuboradi → bot uni daftar varaqasiga qo'lda yozilgan
- * ko'rinishda (chiziqli yoki katak) rasm qilib qaytaradi.
+ * ko'rinishda rasm qilib qaytaradi.
  *
- * Yozuv uslubi 39 ta qo'lyozma shriftdan tanlanadi
- * (`src/lib/handwriting/fonts.generated.ts`), ular faqat kerak bo'lganda
- * o'qiladi va keshda saqlanadi.
+ * Interfeys pastdagi doimiy (reply) menyuda: tugmalar chat ichida emas, ekran
+ * tubida turadi. Asosiy menyu: `✍️ Matn kiritish` va `⚙️ Sozlamalar`; sozlamalar
+ * ichida siyoh rangi (10 xil), qog'oz turi (3 xil), yozuv uslubi (39 shrift,
+ * rasm ko'rinishida), yozuv sozlamalari va daftarlar.
+ *
+ * Yozilgan matn "daftar bazasi"ga (`notebooks.json`) tushadi: har bir daftar
+ * 12/36/48/96 varaqdan iborat, varaqning old tomonida chegara chapda, orqa
+ * tomonida — o'ngda (xuddi haqiqiy daftar kabi).
  *
  * Ishga tushirish:
  *   bun bot/index.ts                 # long polling (eng oddiy usul)
@@ -23,17 +28,18 @@ import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderNotebook } from "../src/lib/handwriting/render";
-import {
-  FALLBACK_FONT_ID,
-  FONT_LIBRARY,
-  fontEntry,
-} from "../src/lib/handwriting/fonts.generated";
-import { FONT_CATEGORIES, categoryLabel, fontSupportsCyrillic } from "../src/lib/handwriting/options";
+import { renderFontSheet } from "../src/lib/handwriting/font-sheet";
+import { fitToSingleSide } from "../src/lib/handwriting/fit";
+import { FALLBACK_FONT_ID, FONT_LIBRARY, fontEntry } from "../src/lib/handwriting/fonts.generated";
+import { INK_OPTIONS, PAPER_OPTIONS, categoryLabel, fontSupportsCyrillic } from "../src/lib/handwriting/options";
+import { fontDisplayName, fontSummary } from "../src/lib/handwriting/names";
+import { createStore, type Notebook, type NotebookSheets, type NotebookStore } from "./db";
 import {
   DEFAULT_STYLE,
   type FontId,
   type InkColor,
   type NotebookStyle,
+  type PageSide,
   type PaperType,
 } from "../src/lib/handwriting/types";
 
@@ -55,17 +61,9 @@ interface TgMessage {
   from?: { id: number; first_name?: string };
 }
 
-interface TgCallbackQuery {
-  id: string;
-  data?: string;
-  message?: TgMessage;
-  from?: { id: number };
-}
-
 interface TgUpdate {
   update_id: number;
   message?: TgMessage;
-  callback_query?: TgCallbackQuery;
 }
 
 interface TgApiResponse<T> {
@@ -75,12 +73,42 @@ interface TgApiResponse<T> {
   parameters?: { retry_after?: number };
 }
 
-interface TgInlineKeyboard {
-  inline_keyboard: { text: string; callback_data: string }[][];
+/** Pastdagi doimiy klaviatura (reply keyboard). */
+interface TgReplyKeyboard {
+  keyboard: { text: string }[][];
+  resize_keyboard: boolean;
+  is_persistent: boolean;
+  input_field_placeholder?: string;
 }
 
+type TgMarkup = TgReplyKeyboard;
+
+/** Botning ochiq menyulari. */
+type MenuId =
+  | "main"
+  | "settings"
+  | "ink"
+  | "paper"
+  | "fonts"
+  | "writing"
+  | "size"
+  | "wobble"
+  | "gap"
+  | "math"
+  | "send"
+  | "books"
+  | "newbook";
+
 /** Har bir chat uchun saqlanadigan sozlamalar. */
-type ChatSettings = Partial<NotebookStyle> & { asFile?: boolean };
+type ChatSettings = Partial<NotebookStyle> & {
+  asFile?: boolean;
+  /** Hozir ko'rsatilgan menyu (tugmalar shunga mos). */
+  menu?: MenuId;
+  /** Shrift varaqasi sahifasi (0 dan boshlanadi). */
+  fontPage?: number;
+  /** Ochiq daftar id'si. */
+  notebookId?: string;
+};
 type SettingsMap = Record<string, ChatSettings>;
 /** Chizish uchun yuklangan shrift baytlari (kalit — shrift id'si). */
 type FontBytes = Record<string, Uint8Array>;
@@ -89,85 +117,132 @@ type FontBytes = Record<string, Uint8Array>;
 /* Konstantalar                                                        */
 /* ------------------------------------------------------------------ */
 
+/** Pastdagi menyu tugmalarining matnlari (routing shu matnlar bo'yicha). */
+const L = {
+  text: "✍️ Matn kiritish",
+  settings: "⚙️ Sozlamalar",
+  ink: "🖋 Siyoh rangi",
+  paper: "📄 Qog'oz turi",
+  font: "✍️ Yozuv uslubi",
+  writing: "📐 Yozuv sozlamalari",
+  books: "📚 Daftarlar",
+  newBook: "➕ Yangi daftar",
+  backMain: "⬅️ Asosiy menyu",
+  backSettings: "⬅️ Sozlamalar",
+  backWriting: "⬅️ Yozuv sozlamalari",
+  backBooks: "⬅️ Daftarlar",
+  backFonts: "⬅️ Yozuv uslubi",
+  prevPage: "⬅️ Oldingi",
+  nextPage: "Keyingi ➡️",
+  sizeMenu: "🔠 O'lcham",
+  wobbleMenu: "〰️ Qo'l tebranishi",
+  gapMenu: "📏 Qator oralig'i",
+  mathMenu: "🔢 Matematika",
+  sendMenu: "🖼 Yuborish turi",
+} as const;
+
 const PAPER_LABEL: Record<PaperType, string> = {
   lined: "yo'l-yo'l daftar",
   grid: "katak daftar",
-  plain: "toza varaq",
+  plain: "toza (A4) varaq",
 };
 
-/** Tugmalar uchun qisqa nomlar. */
+/** Qog'oz menyusidagi tugma matnlari. */
 const PAPER_SHORT: Record<PaperType, string> = {
   lined: "Yo'l-yo'l",
   grid: "Katak",
-  plain: "Toza",
+  plain: "Toza (A4)",
 };
 
-const INK_LABEL: Record<InkColor, string> = {
-  blue: "ko'k ruchka",
-  black: "qora ruchka",
-  graphite: "qalam",
-  green: "yashil ruchka",
-  red: "qizil ruchka",
-  purple: "siyohrang ruchka",
+const INK_IDS: InkColor[] = INK_OPTIONS.map((option) => option.id);
+const INK_LABEL = Object.fromEntries(INK_OPTIONS.map((option) => [option.id, option.label])) as Record<
+  InkColor,
+  string
+>;
+const INK_HEX = Object.fromEntries(INK_OPTIONS.map((option) => [option.id, option.hex])) as Record<
+  InkColor,
+  string
+>;
+/** Tugmalar uchun qisqa siyoh nomi: "Ko'k ruchka" → "Ko'k". */
+const INK_BUTTON = Object.fromEntries(
+  INK_OPTIONS.map((option) => [option.id, option.label.replace(/ ruchka$/, "")]),
+) as Record<InkColor, string>;
+
+const PAPER_IDS: PaperType[] = PAPER_OPTIONS.map((option) => option.id);
+
+/** Eng ko'p ishlatiladigan shriftlar uchun qisqa buyruqlar. */
+const QUICK_FONTS: Record<string, FontId> = {
+  "/caveat": "caveat",
+  "/marck": "marckscript",
 };
 
-const INK_HEX: Record<InkColor, string> = {
-  blue: "#1B3E8F",
-  black: "#1F1F26",
-  graphite: "#4B4B55",
-  green: "#1F6B4A",
-  red: "#B3253B",
-  purple: "#5B3A8E",
-};
+/** Yozuv o'lchami variantlari. */
+const SIZE_OPTIONS = [26, 30, 34, 38, 42, 46, 52];
 
-const PAPER_IDS: PaperType[] = ["lined", "grid", "plain"];
-const INK_IDS: InkColor[] = ["blue", "black", "graphite", "green", "red", "purple"];
-
-/** Tugmalarda ko'rsatiladigan eng ko'p ishlatiladigan shriftlar. */
-const POPULAR_FONTS: FontId[] = [
-  "caveat",
-  "marckscript",
-  "badscript",
-  "neucha",
-  "patrickhand",
-  "dancingscript",
-  "pangolin",
-  "kalam",
-  "shadowsintolight",
-  "caveatbrush",
-  "greatvibes",
-  "amaticsc",
+/** Qo'l tebranishi (wobble) darajalari. */
+const WOBBLE_OPTIONS: { label: string; value: number }[] = [
+  { label: "Tekis", value: 0.25 },
+  { label: "O'rtacha", value: 0.55 },
+  { label: "Jonli", value: 0.85 },
 ];
 
-const ALLOWED_UPDATES = ["message", "callback_query"];
-const MAX_PAGES = 12;
+/** Qator oralig'i (shrift o'lchamiga nisbatan koeffitsient). */
+const GAP_OPTIONS: { label: string; ratio: number }[] = [
+  { label: "Zich", ratio: 1.45 },
+  { label: "O'rtacha", ratio: 1.65 },
+  { label: "Keng", ratio: 1.9 },
+];
+
+const MATH_ON = "🔢 Matematika: yoniq";
+const MATH_OFF = "🔢 Matematika: o'chiq";
+const SEND_PHOTO = "🖼 Rasm sifatida";
+const SEND_FILE = "📄 PNG fayl sifatida";
+
+/** Varaqani tanlash tugmalari: "12 varaq" va h.k. */
+const SHEET_BUTTONS: { text: string; sheets: NotebookSheets }[] = [
+  { text: "12 varaq", sheets: 12 },
+  { text: "36 varaq", sheets: 36 },
+  { text: "48 varaq", sheets: 48 },
+  { text: "96 varaq", sheets: 96 },
+];
+
+/** Shrift varaqasidagi qatorlar soni (bir sahifadagi shrift soni). */
+const FONT_PAGE_SIZE = 8;
+const FONT_PAGE_COUNT = Math.max(1, Math.ceil(FONT_LIBRARY.length / FONT_PAGE_SIZE));
+
+const ALLOWED_UPDATES = ["message"];
+/** Bitta xabardan ko'pi bilan shuncha tomon yoziladi (Telegram chegaralari uchun). */
+const MAX_SIDES_PER_MESSAGE = 12;
+/** Bitta tomon uchun ko'pi bilan shuncha varaqa rasmi yuboriladi. */
+const MAX_RENDER_PAGES = 4;
+/** Bitta xabarda qabul qilinadigan eng ko'p belgi. */
 const MAX_CHARS = 4000;
-const SIZE_MIN = 26;
-const SIZE_MAX = 52;
+const SIZE_MIN = SIZE_OPTIONS[0];
+const SIZE_MAX = SIZE_OPTIONS[SIZE_OPTIONS.length - 1];
 const WEBHOOK_PATH = "/telegram/webhook";
-/** Telegram xabar chegarasi 4096 belgi — undan sal pastroq xavfsiz chegara. */
-const TEXT_LIMIT = 3800;
 const CYRILLIC_RE = /[\u0400-\u04FF]/;
 
 const HELP_TEXT = [
-  "📓 Daftar Bot — matningizni daftarga qo'lda yozilgan ko'rinishda rasm qilib beraman.",
+  "📓 Daftar Bot — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
   "",
-  "Menga oddiy matn yuboring (adabiyot, insho, diktant) yoki matematika misollari.",
+  "Pastdagi menyudan foydalaning:",
+  `• ${L.text} — yozishni boshlash (daftar tanlanadi)`,
+  `• ${L.settings} — siyoh rangi, qog'oz turi, yozuv uslubi va boshqa sozlamalar`,
   "",
-  "Daftar va siyoh:",
-  "/lined — yo'l-yo'l daftar, /grid — katak daftar, /plain — toza varaq",
-  "/blue /black /graphite /green /red /purple — siyoh rangi",
-  "",
-  "Yozuv uslubi:",
-  `/fonts — ${FONT_LIBRARY.length} qo'lyozma shriftli kutubxona`,
+  "Buyruqlar:",
+  "/start — menyuni ko'rsatish",
+  "/settings — sozlamalar menyusi",
+  "/id — chat ID'ni ko'rsatadi",
+  "/fonts — shriftlar kutubxonasi (rasm ko'rinishida)",
   "/font <id> — shriftni tanlash (masalan /font badscript)",
-  "/caveat /marck — tez tanlash: erkin yoki ozoda yozuv",
-  "/size 26..52 — shrift o'lchami",
-  "",
-  "Boshqa:",
-  "/file — natijani PNG fayl sifatida yuborish (yoki rasm sifatida)",
-  "/settings — sozlamalar tugmalari",
+  `/size ${SIZE_MIN}..${SIZE_MAX} — shrift o'lchami`,
+  "/file — natijani PNG fayl qilib yuborish",
+  ...INK_IDS.map((id) => `/${id}`).join(" ") + " — siyoh rangi",
+  PAPER_IDS.map((id) => `/${id}`).join(" ") + " — qog'oz turi",
   "/help — shu yordam",
+  "",
+  "Daftarlar: ➕ Yangi daftar (12/36/48/96 varaq). Yozgan matningiz varaq-tomonga",
+  "ketma-ket tushadi: old tomonda chegara chapda, orqa tomonda — o'ngda.",
   "",
   "Matematika yozuvi:",
   "• daraja: x^2, x^{10}",
@@ -185,6 +260,13 @@ const DATA_DIR = process.env.BOT_DATA_DIR?.trim() || join(process.cwd(), "bot", 
 const SETTINGS_FILE = join(DATA_DIR, "settings.json");
 
 let settingsCache: SettingsMap = {};
+let notebookStore: NotebookStore | null = null;
+
+/** Daftar bazasi (bir marta ochiladi). */
+async function books(): Promise<NotebookStore> {
+  if (!notebookStore) notebookStore = await createStore(DATA_DIR);
+  return notebookStore;
+}
 
 /** Fayldan sozlamalarni o'qiydi; fayl yo'q yoki buzilgan bo'lsa bo'sh obyekt qaytaradi. */
 async function loadSettings(): Promise<SettingsMap> {
@@ -246,13 +328,17 @@ function isFileMode(chatId: number): boolean {
   return rawSettings(chatId).asFile === true;
 }
 
-/** Shriftning ko'rsatiladigan nomi: "Marck Script — ozoda yozuv" → "Marck Script". */
-function displayName(id: FontId): string {
-  const entry = fontEntry(id);
-  if (!entry) return id;
-  const short = entry.label.split(" — ")[0];
-  return short || entry.family || id;
+function currentMenu(chatId: number): MenuId {
+  return rawSettings(chatId).menu ?? "main";
 }
+
+function fontPageOf(chatId: number): number {
+  const page = rawSettings(chatId).fontPage ?? 0;
+  return Math.min(FONT_PAGE_COUNT - 1, Math.max(0, page));
+}
+
+/** Shriftning ko'rsatiladigan nomi (`names.ts` dagi umumiy yordamchi). */
+const displayName = fontDisplayName;
 
 /* ------------------------------------------------------------------ */
 /* Telegram API yordamchilari                                          */
@@ -305,21 +391,26 @@ function tg<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   });
 }
 
-/** PNG'ni multipart/form-data orqali rasm yoki fayl sifatida yuboradi. */
+/** Matn yuboradi (ixtiyoriy pastki klaviatura bilan). */
+async function sendMessage(chatId: number, text: string, markup?: TgMarkup): Promise<void> {
+  await tg("sendMessage", {
+    chat_id: chatId,
+    text,
+    disable_web_page_preview: true,
+    ...(markup ? { reply_markup: markup } : {}),
+  });
+}
+
+/** PNG'ni rasm (yoki fayl) sifatida yuboradi. */
 async function sendPng(
   chatId: number,
   png: Uint8Array,
-  options: {
-    asFile: boolean;
-    filename: string;
-    caption?: string;
-    keyboard?: TgInlineKeyboard;
-  },
+  options: { asFile: boolean; filename: string; caption?: string; markup?: TgMarkup },
 ): Promise<void> {
   const form = new FormData();
   form.append("chat_id", String(chatId));
   if (options.caption) form.append("caption", options.caption.slice(0, 1000));
-  if (options.keyboard) form.append("reply_markup", JSON.stringify(options.keyboard));
+  if (options.markup) form.append("reply_markup", JSON.stringify(options.markup));
 
   // PNG baytlarini alohida ArrayBuffer'ga ko'chirib, Blob yasaymiz
   // (Buffer ko'rinishidagi baytlar ham xavfsiz yuborilishi uchun).
@@ -332,19 +423,6 @@ async function sendPng(
     form.append("photo", blob, options.filename);
     await tgRequest("sendPhoto", { method: "POST", body: form });
   }
-}
-
-async function sendMessage(
-  chatId: number,
-  text: string,
-  keyboard?: TgInlineKeyboard,
-): Promise<void> {
-  await tg("sendMessage", {
-    chat_id: chatId,
-    text,
-    disable_web_page_preview: true,
-    ...(keyboard ? { reply_markup: keyboard } : {}),
-  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -377,221 +455,762 @@ function loadFont(id: FontId): Promise<Uint8Array | null> {
   return promise;
 }
 
-/**
- * Berilgan uslub uchun zarur shriftlarni yuklaydi: tanlangan shrift va
- * (yetim belgilar uchun) zaxira shrift. Kutubxonaning qolgan 37 shrifti
- * tarmoqqa ham, xotiraga ham tegmaydi.
- */
-async function fontsFor(style: NotebookStyle): Promise<FontBytes> {
-  const ids = [style.font, FALLBACK_FONT_ID].filter((id, index, list) => list.indexOf(id) === index);
-  const loaded = await Promise.all(ids.map((id) => loadFont(id)));
+/** Berilgan shrift id'larini (takrorlarsiz) yuklaydi. */
+async function loadFonts(ids: FontId[]): Promise<FontBytes> {
+  const unique = ids.filter((id, index, list) => list.indexOf(id) === index);
+  const loaded = await Promise.all(unique.map((id) => loadFont(id)));
 
   const fonts: FontBytes = {};
-  ids.forEach((id, index) => {
+  unique.forEach((id, index) => {
     const bytes = loaded[index];
     if (bytes) fonts[id] = bytes;
   });
   return fonts;
 }
 
+/**
+ * Berilgan uslub uchun zarur shriftlarni yuklaydi: tanlangan shrift va
+ * (yetim belgilar uchun) zaxira shrift. Kutubxonaning qolgan shriftlari
+ * tarmoqqa ham, xotiraga ham tegmaydi.
+ */
+function fontsFor(style: NotebookStyle): Promise<FontBytes> {
+  return loadFonts([style.font, FALLBACK_FONT_ID]);
+}
+
 /* ------------------------------------------------------------------ */
-/* Klaviaturalar                                                       */
+/* Menyu klaviaturalari                                                */
 /* ------------------------------------------------------------------ */
 
-/** Shrift tanlash klaviaturasi (mashhur shriftlar + to'liq ro'yxat). */
-function fontKeyboard(chatId: number): TgInlineKeyboard {
-  const current = styleFor(chatId).font;
-  const rows: { text: string; callback_data: string }[][] = [];
+/** Pastdagi klaviaturani yasaydi (tugmalar matni bilan). */
+function reply(rows: string[][]): TgMarkup {
+  return {
+    keyboard: rows.map((row) => row.map((text) => ({ text }))),
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
 
-  for (let index = 0; index < POPULAR_FONTS.length; index += 2) {
+/** Joriy qiymatni ✓ bilan belgilaydi. */
+function mark(active: boolean, label: string): string {
+  return `${active ? "✓ " : ""}${label}`;
+}
+
+/** Tugma matnidan ✓ belgisini olib tashlaydi. */
+function unmark(label: string): string {
+  return label.replace(/^✓\s*/, "");
+}
+
+function mainKeyboard(): TgMarkup {
+  return reply([[L.text, L.settings]]);
+}
+
+function settingsKeyboard(): TgMarkup {
+  return reply([
+    [L.ink, L.paper],
+    [L.font, L.writing],
+    [L.books, L.backMain],
+  ]);
+}
+
+function inkKeyboard(style: NotebookStyle): TgMarkup {
+  const rows: string[][] = [];
+  for (let index = 0; index < INK_IDS.length; index += 2) {
     rows.push(
-      POPULAR_FONTS.slice(index, index + 2).map((id) => ({
-        text: `${current === id ? "✓ " : ""}${displayName(id)}`,
-        callback_data: `font:${id}`,
-      })),
+      INK_IDS.slice(index, index + 2).map((id) => mark(style.ink === id, INK_BUTTON[id])),
     );
   }
-
-  rows.push([{ text: `Barcha ${FONT_LIBRARY.length} shrift`, callback_data: "open:fonts" }]);
-  return { inline_keyboard: rows };
+  rows.push([L.backSettings]);
+  return reply(rows);
 }
 
-/** Har bir rasm ostidagi tez tugmalar. */
-function quickKeyboard(chatId: number): TgInlineKeyboard {
-  const style = styleFor(chatId);
+function paperKeyboard(style: NotebookStyle): TgMarkup {
+  return reply([
+    PAPER_IDS.map((id) => mark(style.paper === id, PAPER_SHORT[id])),
+    [L.backSettings],
+  ]);
+}
+
+function writingKeyboard(): TgMarkup {
+  return reply([[L.sizeMenu, L.wobbleMenu], [L.gapMenu, L.mathMenu], [L.sendMenu], [L.backSettings]]);
+}
+
+function sizeKeyboard(style: NotebookStyle): TgMarkup {
+  const rows: string[][] = [];
+  for (let index = 0; index < SIZE_OPTIONS.length; index += 4) {
+    rows.push(SIZE_OPTIONS.slice(index, index + 4).map((size) => mark(style.fontSize === size, String(size))));
+  }
+  rows.push([L.backWriting]);
+  return reply(rows);
+}
+
+function wobbleKeyboard(style: NotebookStyle): TgMarkup {
+  const rows = [
+    WOBBLE_OPTIONS.map((option) => mark(Math.abs(style.wobble - option.value) < 0.05, option.label)),
+  ];
+  rows.push([L.backWriting]);
+  return reply(rows);
+}
+
+function gapKeyboard(style: NotebookStyle): TgMarkup {
+  const rows = [
+    GAP_OPTIONS.map((option) =>
+      mark(Math.abs(style.lineGap - Math.round(style.fontSize * option.ratio)) <= 1, option.label),
+    ),
+  ];
+  rows.push([L.backWriting]);
+  return reply(rows);
+}
+
+function mathKeyboard(style: NotebookStyle): TgMarkup {
+  return reply([[style.mathMode ? MATH_ON : MATH_OFF], [L.backWriting]]);
+}
+
+function sendKeyboard(chatId: number): TgMarkup {
   const asFile = isFileMode(chatId);
-  return {
-    inline_keyboard: [
-      [
-        { text: "Yo'l-yo'l", callback_data: "paper:lined" },
-        { text: "Katak", callback_data: "paper:grid" },
-        { text: "Toza", callback_data: "paper:plain" },
-      ],
-      [
-        { text: "Ko'k", callback_data: "ink:blue" },
-        { text: "Qora", callback_data: "ink:black" },
-        { text: asFile ? "Rasm sifatida" : "PNG fayl sifatida", callback_data: "toggle:file" },
-      ],
-      [
-        { text: `✍️ ${displayName(style.font)}`, callback_data: "open:fonts" },
-        { text: "⚙️ Sozlamalar", callback_data: "open:settings" },
-      ],
-    ],
-  };
+  return reply([[mark(!asFile, SEND_PHOTO), mark(asFile, SEND_FILE)], [L.backWriting]]);
 }
 
-/** /settings xabari uchun tugmalar (joriy qiymat ✓ bilan belgilanadi). */
-function settingsKeyboard(chatId: number): TgInlineKeyboard {
-  const style = styleFor(chatId);
-  const asFile = isFileMode(chatId);
-  const mark = (active: boolean, label: string) => `${active ? "✓ " : ""}${label}`;
-  return {
-    inline_keyboard: [
-      PAPER_IDS.map((id) => ({ text: mark(style.paper === id, PAPER_SHORT[id]), callback_data: `paper:${id}` })),
-      INK_IDS.slice(0, 3).map((id) => ({ text: mark(style.ink === id, INK_LABEL[id].split(" ")[0]), callback_data: `ink:${id}` })),
-      INK_IDS.slice(3).map((id) => ({ text: mark(style.ink === id, INK_LABEL[id].split(" ")[0]), callback_data: `ink:${id}` })),
-      [{ text: `✍️ Yozuv: ${displayName(style.font)}`, callback_data: "open:fonts" }],
-      [
-        { text: mark(!asFile, "Rasm sifatida"), callback_data: "file:off" },
-        { text: mark(asFile, "PNG fayl sifatida"), callback_data: "file:on" },
-      ],
-    ],
-  };
+/** Shrift varaqasi tugmalari: `1 Caveat`, `2 Marck Script`, … */
+function fontKeyboard(chatId: number, page: number, pageFonts: FontId[]): TgMarkup {
+  const current = styleFor(chatId).font;
+  const rows: string[][] = [];
+  for (let index = 0; index < pageFonts.length; index += 2) {
+    rows.push(
+      pageFonts.slice(index, index + 2).map((id, offset) => {
+        const number = index + offset + 1;
+        return `${current === id ? "✓ " : ""}${number} ${displayName(id)}`;
+      }),
+    );
+  }
+  const navigation: string[] = [];
+  if (page > 0) navigation.push(L.prevPage);
+  if (page < FONT_PAGE_COUNT - 1) navigation.push(L.nextPage);
+  if (navigation.length > 0) rows.push(navigation);
+  rows.push([L.backSettings]);
+  return reply(rows);
 }
 
-function settingsText(chatId: number, asFile: boolean): string {
-  const style = styleFor(chatId);
-  const entry = fontEntry(style.font);
-  const fontLine = entry
-    ? `${displayName(entry.id)} • ${categoryLabel(entry.category)}${entry.cyrillic ? " • kirill ✓" : ""}`
-    : displayName(style.font);
+/** Daftarlar ro'yxati: har bir daftar alohida qatorda. */
+function booksKeyboard(chatId: number, list: Notebook[], store: NotebookStore): TgMarkup {
+  const rows: string[][] = [];
+  for (const notebook of list.slice(0, 8)) {
+    rows.push([notebookButton(notebook, store)]);
+  }
+  rows.push([L.newBook, L.backMain]);
+  return reply(rows);
+}
+
+function newBookKeyboard(): TgMarkup {
+  return reply([
+    [SHEET_BUTTONS[0].text, SHEET_BUTTONS[1].text],
+    [SHEET_BUTTONS[2].text, SHEET_BUTTONS[3].text],
+    [L.backBooks],
+  ]);
+}
+
+/** Daftar tugmasining matni: `📖 1-daftar • 5/24`. */
+function notebookButton(notebook: Notebook, store: NotebookStore): string {
+  return `📖 ${notebook.title} • ${store.usedSides(notebook)}/${store.capacity(notebook)}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Menyu matnlari                                                      */
+/* ------------------------------------------------------------------ */
+
+function welcomeText(): string {
   return [
-    "⚙️ Joriy sozlamalar",
+    "👋 Assalomu alaykum! Men Daftar Bot — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
     "",
-    `• Qog'oz: ${PAPER_LABEL[style.paper]}`,
+    `📚 Avval ${L.newBook} bilan daftar yaratasiz (12, 36, 48 yoki 96 varaq),`,
+    `✍️ keyin ${L.text} orqali daftarni tanlab matn yuborasiz.`,
+    "",
+    `${L.settings} ichida: siyoh rangi (10 xil), qog'oz turi (3 xil), yozuv uslubi`,
+    `(${FONT_LIBRARY.length} qo'lyozma shrift) va yozuv sozlamalari bor.`,
+  ].join("\n");
+}
+
+function settingsText(chatId: number): string {
+  const style = styleFor(chatId);
+  return [
+    "⚙️ Sozlamalar",
+    "",
     `• Siyoh: ${INK_LABEL[style.ink]} (${INK_HEX[style.ink]})`,
-    `• Yozuv: ${fontLine}`,
-    `• Shrift o'lchami: ${style.fontSize}px`,
-    `• Yuborish: ${asFile ? "PNG fayl" : "rasm (foto)"}`,
+    `• Qog'oz: ${PAPER_LABEL[style.paper]} (A4)`,
+    `• Yozuv: ${fontSummary(style.font)}`,
+    `• O'lcham: ${style.fontSize}px • Qator: ${style.lineGap}px • Tebranish: ${style.wobble.toFixed(2)}`,
+    `• Matematika: ${style.mathMode ? "yoniq" : "o'chiq"} • Yuborish: ${isFileMode(chatId) ? "PNG fayl" : "rasm"}`,
     "",
-    `Tugmalardan birini tanlang — keyingi matningiz shu uslubda chiqadi. Kutubxonada ${FONT_LIBRARY.length} shrift bor: /fonts`,
+    "Kerakli bo'limni tanlang — har biri alohida ochiladi.",
+  ].join("\n");
+}
+
+function writingText(chatId: number): string {
+  const style = styleFor(chatId);
+  return [
+    "📐 Yozuv sozlamalari",
+    "",
+    `• O'lcham: ${style.fontSize}px`,
+    `• Qo'l tebranishi: ${WOBBLE_OPTIONS.reduce((best, option) =>
+      Math.abs(style.wobble - option.value) < Math.abs(style.wobble - best.value) ? option : best,
+    ).label}`,
+    `• Qator oralig'i: ${style.lineGap}px`,
+    `• Matematika rejimi: ${style.mathMode ? "yoniq" : "o'chiq"}`,
+    "",
+    "Har bir sozlamani alohida ochib o'zgartirasiz.",
+  ].join("\n");
+}
+
+function paperText(chatId: number): string {
+  const style = styleFor(chatId);
+  return [
+    "📄 Qog'oz turi (A4)",
+    "",
+    ...PAPER_OPTIONS.map((option) => `${mark(style.paper === option.id, PAPER_SHORT[option.id])} — ${option.hint}`),
+    "",
+    "Tanlangan qog'oz keyingi barcha varaqalarga qo'llanadi.",
+  ].join("\n");
+}
+
+function inkText(chatId: number): string {
+  const style = styleFor(chatId);
+  return [
+    `🖋 Siyoh rangi — ${INK_OPTIONS.length} xil`,
+    "",
+    `Joriy: ${INK_LABEL[style.ink]} (${INK_HEX[style.ink]})`,
+    "",
+    "Rangni tanlang — keyingi rasmlar shu rangda chiqadi.",
+  ].join("\n");
+}
+
+function sizeText(chatId: number): string {
+  const style = styleFor(chatId);
+  return [
+    "🔠 Yozuv o'lchami",
+    "",
+    `Joriy: ${style.fontSize}px (qatorlar orasi ${style.lineGap}px)`,
+    "",
+    `Tanlang: ${SIZE_OPTIONS.join(", ")}`,
   ].join("\n");
 }
 
 /* ------------------------------------------------------------------ */
-/* Shriftlar ro'yxati                                                  */
+/* Menyuni ochish                                                      */
 /* ------------------------------------------------------------------ */
 
-/** Kutubxonani kategoriyalar bo'yicha matn ko'rinishida tayyorlaydi. */
-function fontLibraryText(currentId: FontId): string {
-  const lines: string[] = [
-    `✍️ Shriftlar kutubxonasi — ${FONT_LIBRARY.length} qo'lyozma shrift`,
-    "",
-    "Tanlash: /font <id> (masalan /font badscript)",
-  ];
+/** Menyuni ochadi: matn + pastdagi klaviatura (va kerak bo'lsa shrift rasmi). */
+async function openMenu(chatId: number, menu: MenuId): Promise<void> {
+  const style = styleFor(chatId);
+  await updateSettings(chatId, { menu });
 
-  for (const category of FONT_CATEGORIES) {
-    const fonts = FONT_LIBRARY.filter((entry) => entry.category === category.id);
-    if (fonts.length === 0) continue;
-    lines.push("", `${category.label} (${fonts.length}):`);
-    for (const entry of fonts) {
-      lines.push(
-        `${entry.id === currentId ? "✓ " : ""}${entry.id} — ${displayName(entry.id)}${entry.cyrillic ? " (kirill)" : ""}`,
+  switch (menu) {
+    case "ink":
+      await sendMessage(chatId, inkText(chatId), inkKeyboard(style));
+      return;
+    case "paper":
+      await sendMessage(chatId, paperText(chatId), paperKeyboard(style));
+      return;
+    case "writing":
+      await sendMessage(chatId, writingText(chatId), writingKeyboard());
+      return;
+    case "size":
+      await sendMessage(chatId, sizeText(chatId), sizeKeyboard(style));
+      return;
+    case "wobble":
+      await sendMessage(
+        chatId,
+        "〰️ Qo'l tebranishi — yozuvning jonli ko'rinishi.\n\nTekis: deyarli bosma, Jonli: qo'l bilan tez yozilgan.",
+        wobbleKeyboard(style),
       );
+      return;
+    case "gap":
+      await sendMessage(
+        chatId,
+        "📏 Qator oralig'i — satrlar orasidagi masofa.\n\nZich: ko'proq matn sig'adi, Keng: katta yozuv uchun.",
+        gapKeyboard(style),
+      );
+      return;
+    case "math":
+      await sendMessage(
+        chatId,
+        "🔢 Matematika rejimi — x^2, \\frac{a}{b}, \\sqrt{x} kabi yozuvlar tahlil qilinadi.",
+        mathKeyboard(style),
+      );
+      return;
+    case "send":
+      await sendMessage(
+        chatId,
+        "🖼 Yuborish turi\n\nRasm sifatida — Telegram'da darhol ko'rinadi.\nPNG fayl sifatida — yuklab olish uchun (siqilmaydi).",
+        sendKeyboard(chatId),
+      );
+      return;
+    case "fonts": {
+      const page = fontPageOf(chatId);
+      await openFontPage(chatId, page);
+      return;
     }
+    case "newbook":
+      await sendMessage(
+        chatId,
+        "➕ Yangi daftar\n\nDaftar varaq sonini tanlang. Har varaqning ikki tomoni bor: old tomonida chegara chapda, orqa tomonida — o'ngda.",
+        newBookKeyboard(),
+      );
+      return;
+    case "books": {
+      const store = await books();
+      const list = store.list(chatId);
+      if (list.length === 0) {
+        await sendMessage(
+          chatId,
+          "📚 Hozircha daftaringiz yo'q.\n\nMatn yozish uchun avval ➕ Yangi daftar bilan daftar yaratishingiz kerak.",
+          newBookKeyboard(),
+        );
+        return;
+      }
+      await sendMessage(chatId, booksText(chatId, list, store), booksKeyboard(chatId, list, store));
+      return;
+    }
+    default:
+      await sendMessage(chatId, welcomeText(), mainKeyboard());
   }
+}
 
+function booksText(chatId: number, list: Notebook[], store: NotebookStore): string {
+  const active = rawSettings(chatId).notebookId;
+  const lines = [
+    "📚 Daftarlaringiz",
+    "",
+    ...list.map((notebook) => {
+      const tag = notebook.id === active ? " ← ochiq" : "";
+      return `${notebookButton(notebook, store)}${tag}`;
+    }),
+    "",
+    "Matn yozish uchun daftarni tanlang yoki ➕ Yangi daftar bilan yangisini oching.",
+  ];
   return lines.join("\n");
 }
 
-/** Xabarni Telegram chegarasiga sig'diradi: faqat butun qatorlar qoldiriladi. */
-function clipLines(text: string, limit = TEXT_LIMIT): string {
-  if (text.length <= limit) return text;
-
-  const kept: string[] = [];
-  let length = 0;
-  for (const line of text.split("\n")) {
-    if (length + line.length + 1 > limit - 150) break;
-    kept.push(line);
-    length += line.length + 1;
-  }
-  kept.push("", "…ro'yxat qisqartirildi. Istalgan shrift id'sini /font <id> bilan tanlaysiz.");
-  return kept.join("\n");
-}
-
-function fontLibraryMessage(chatId: number): string {
-  return clipLines(fontLibraryText(styleFor(chatId).font));
-}
-
-/* ------------------------------------------------------------------ */
-/* Render va yuborish                                                  */
-/* ------------------------------------------------------------------ */
-
-/** Matnni daftar varaqalariga aylantirib, foydalanuvchiga yuboradi. */
-async function handleRender(chatId: number, rawText: string): Promise<void> {
-  const text = rawText.trim();
-  if (!text) {
-    await sendMessage(chatId, "Iltimos, matn yuboring — men uni daftarga yozib beraman. 📝");
-    return;
-  }
-
-  const truncated = text.length > MAX_CHARS;
-  const body = truncated ? text.slice(0, MAX_CHARS) : text;
+/** Shrift varaqasining bir sahifasini rasm ko'rinishida yuboradi. */
+async function openFontPage(chatId: number, page: number): Promise<void> {
   const style = styleFor(chatId);
+  const safePage = Math.min(FONT_PAGE_COUNT - 1, Math.max(0, page));
+  const slice = FONT_LIBRARY.slice(safePage * FONT_PAGE_SIZE, (safePage + 1) * FONT_PAGE_SIZE);
+  const pageFonts = slice.map((entry) => entry.id);
+  await updateSettings(chatId, { menu: "fonts", fontPage: safePage });
+
+  // Telegram shriftlarni ko'rsata olmaydi, shuning uchun ro'yxatni rasm qilib
+  // yuboramiz: har bir nom o'z qo'lyozmasida chiziladi.
+  const fonts = await loadFonts([...pageFonts, FALLBACK_FONT_ID]);
+  const sheet = await renderFontSheet(pageFonts, fonts, {
+    rowsPerSheet: FONT_PAGE_SIZE,
+    title: `Yozuv uslubi ${safePage + 1}/${FONT_PAGE_COUNT}`,
+    ink: style.ink,
+    paper: "plain",
+  });
+
+  const caption = [
+    `✍️ Yozuv uslubi — ${safePage + 1}-sahifa (${FONT_LIBRARY.length} shrift)`,
+    "",
+    "Rasmdagi raqamni pastdagi tugmalardan tanlang.",
+    `Joriy: ${displayName(style.font)}`,
+  ].join("\n");
+
+  await sendPng(chatId, sheet.png, {
+    asFile: false,
+    filename: `shriftlar-${safePage + 1}.png`,
+    caption,
+    markup: fontKeyboard(chatId, safePage, pageFonts),
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Daftar bilan ishlash                                                */
+/* ------------------------------------------------------------------ */
+
+/** Varaq tomoni: juft indeks — old tomon (chegara chapda), toq — orqa tomon. */
+function sideOf(sideIndex: number): PageSide {
+  return sideIndex % 2 === 0 ? "recto" : "verso";
+}
+
+function sideLabel(sideIndex: number): string {
+  return sideOf(sideIndex) === "recto" ? "old tomoni (chegara chapda)" : "orqa tomoni (chegara o'ngda)";
+}
+
+/** Berilgan tomon uchun uslub: tomonga qarab birinchi varaqning tomoni belgilanadi. */
+function sideStyle(chatId: number, sideIndex: number): NotebookStyle {
+  return { ...styleFor(chatId), startSide: sideOf(sideIndex) };
+}
+
+/** Bitta tomonni chizib, foydalanuvchiga yuboradi. */
+async function sendSide(chatId: number, notebook: Notebook, sideIndex: number): Promise<void> {
+  const store = await books();
+  const side = notebook.sides[sideIndex];
+  if (!side || side.text.trim().length === 0) return;
+
+  const style = sideStyle(chatId, sideIndex);
   const asFile = isFileMode(chatId);
-
-  await tg("sendChatAction", { chat_id: chatId, action: "upload_photo" }).catch(() => undefined);
-
   const fonts = await fontsFor(style);
   if (Object.keys(fonts).length === 0) {
     await sendMessage(chatId, "Kechirasiz, shrift fayllari topilmadi — botni qayta ishga tushirish kerak. 🙏");
     return;
   }
 
-  const result = await renderNotebook({ text: body, style, fonts });
+  await tg("sendChatAction", { chat_id: chatId, action: "upload_photo" }).catch(() => undefined);
 
-  if (result.pages.length === 0) {
-    await sendMessage(chatId, "Matn bo'sh ko'rindi — yozib ko'ring. 🤔");
-    return;
-  }
+  const result = await renderNotebook({ text: side.text, style, fonts });
+  if (result.pages.length === 0) return;
 
-  const pages = result.pages.slice(0, MAX_PAGES);
+  const sheetNo = Math.floor(sideIndex / 2) + 1;
+  const used = store.usedSides(notebook);
+  const capacity = store.capacity(notebook);
+  const base = [
+    `📖 ${notebook.title} • ${sheetNo}/${notebook.sheets} varaq • ${sideIndex + 1}-bet • ${sideLabel(sideIndex)}`,
+    `${PAPER_SHORT[style.paper]} • ${INK_LABEL[style.ink]} • ${displayName(style.font)}`,
+  ];
+
   const notes: string[] = [];
-  if (truncated) notes.push("Matn juda uzun edi — boshi olindi.");
-  if (result.pages.length > MAX_PAGES) {
-    notes.push(`Faqat birinchi ${MAX_PAGES} varaq yuborildi.`);
+  if (result.pages.length > MAX_RENDER_PAGES) notes.push(`Faqat birinchi ${MAX_RENDER_PAGES} varaqa yuborildi.`);
+  // Tanlangan shrift kirillchani bilmasa, harflar zaxira shriftda chiziladi.
+  if (CYRILLIC_RE.test(side.text) && !fontSupportsCyrillic(style.font)) {
+    notes.push("Bu shrift kirillcha harflarni bilmaydi — ular zaxira shriftda chizildi.");
   }
-  if (result.warnings.length > 0) {
-    notes.push(result.warnings.slice(0, 2).join(" "));
-  }
-  // Tanlangan shrift kirillchani bilmasa, harflar zaxira shriftda chiziladi —
-  // buni bir marta, izohning oxirida aytamiz.
-  if (CYRILLIC_RE.test(body) && !fontSupportsCyrillic(style.font)) {
-    notes.push(
-      "Bu shrift kirillcha harflarni bilmaydi — ular zaxira shriftda chizildi. /fonts bilan boshqa shrift tanlang.",
-    );
-  }
-  const note = notes.join(" ");
+  if (used >= capacity) notes.push("📕 Bu daftar to'ldi — ➕ Yangi daftar yaratishingiz mumkin.");
+  else if (capacity - used <= 2) notes.push(`⏳ ${capacity - used} bet qoldi.`);
 
+  const pages = result.pages.slice(0, MAX_RENDER_PAGES);
   for (let index = 0; index < pages.length; index += 1) {
     const page = pages[index];
-    const caption =
-      index === 0
-        ? `${page.index}/${pages.length} varaq • ${PAPER_LABEL[style.paper]} • ${INK_LABEL[style.ink]} • ${displayName(
-            style.font,
-          )}`
-        : `${page.index}/${pages.length} varaq`;
+    const caption = [
+      base.join("\n"),
+      pages.length > 1 ? `(${index + 1}-varaqa)` : "",
+      notes.length > 0 && index === pages.length - 1 ? `⚠️ ${notes.join(" ")}` : "",
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n");
     await sendPng(chatId, page.png, {
       asFile,
-      filename: `daftar-${page.index}.png`,
-      caption: note ? `${caption}\n\n⚠️ ${note}` : caption,
-      keyboard: index === 0 ? quickKeyboard(chatId) : undefined,
+      filename: `${notebook.title}-${sideIndex + 1}.png`,
+      caption,
+      markup: index === 0 ? mainKeyboard() : undefined,
     });
   }
 }
 
+/** Joriy tomonga matn yozadi (tomon kerak bo'lsa ochiladi). */
+async function writeToSide(notebookId: string, sideIndex: number, text: string): Promise<number | null> {
+  const store = await books();
+  let index = sideIndex;
+  if (index < 0) {
+    const created = await store.addSide(notebookId);
+    if (!created) return null;
+    index = store.usedSides(store.get(notebookId) as Notebook) - 1;
+  }
+  const ok = await store.setSideText(notebookId, index, text);
+  return ok ? index : null;
+}
+
+/**
+ * Foydalanuvchi matnini daftarga yozadi: joriy tomonga sig'gani yoziladi,
+ * qolgani keyingi tomonga o'tadi (varaq to'lgani sari chegara tomoni almashadi).
+ */
+async function writeToNotebook(chatId: number, rawText: string): Promise<void> {
+  const store = await books();
+  const activeId = rawSettings(chatId).notebookId;
+  const notebook = activeId ? store.get(activeId) : undefined;
+
+  if (!notebook || notebook.chatId !== chatId) {
+    await updateSettings(chatId, { notebookId: undefined });
+    await offerNotebooks(chatId);
+    return;
+  }
+
+  const body = rawText.trim().slice(0, MAX_CHARS);
+  if (body.length === 0) {
+    await sendMessage(chatId, "Iltimos, matn yuboring — men uni daftarga yozib beraman. 📝", mainKeyboard());
+    return;
+  }
+
+  if (store.usedSides(notebook) >= store.capacity(notebook)) {
+    await sendMessage(
+      chatId,
+      `📕 «${notebook.title}» daftari to'ldi (${notebook.sheets} varaq).\n\n➕ Yangi daftar yaratib, yozishni davom ettirasiz.`,
+      newBookKeyboard(),
+    );
+    await updateSettings(chatId, { menu: "newbook" });
+    return;
+  }
+
+  let remaining = body;
+  let written = 0;
+  const changed: number[] = [];
+  const fonts = await fontsFor(styleFor(chatId));
+
+  while (remaining.length > 0 && written < MAX_SIDES_PER_MESSAGE) {
+    const usedSides = store.usedSides(notebook);
+    const sideIndex = usedSides - 1;
+    const base = sideIndex >= 0 ? notebook.sides[sideIndex].text : "";
+    const candidate = base.length > 0 ? `${base}\n${remaining}` : remaining;
+    const fit = await fitToSingleSide(candidate, {
+      style: sideStyle(chatId, Math.max(0, sideIndex)),
+      fonts,
+    });
+
+    if (fit.fitsEntirely) {
+      const at = await writeToSide(notebook.id, sideIndex, candidate);
+      if (at === null) break;
+      changed.push(at);
+      written += 1;
+      remaining = "";
+      break;
+    }
+
+    // Shu tomonga biror narsa sig'di — uni yozib, qolganini keyingisiga beramiz.
+    if (fit.head.length > base.length || (sideIndex < 0 && fit.head.length > 0)) {
+      const at = await writeToSide(notebook.id, sideIndex, fit.head);
+      if (at === null) break;
+      changed.push(at);
+      written += 1;
+      remaining = fit.tail.trim();
+      continue;
+    }
+
+    // Bu tomonda joy yo'q (yoki birorta so'z ham sig'madi) — yangi tomon ochamiz.
+    if (store.usedSides(notebook) >= store.capacity(notebook)) break;
+    const created = await store.addSide(notebook.id);
+    if (!created) break;
+
+    // Hech narsa sig'masa ham yozib qo'yamiz (aks holda tsikl takrorlanardi).
+    const retry = await fitToSingleSide(remaining, {
+      style: sideStyle(chatId, store.usedSides(notebook) - 1),
+      fonts,
+    });
+    const at = await writeToSide(notebook.id, store.usedSides(notebook) - 1, retry.head.length > 0 ? retry.head : remaining);
+    if (at === null) break;
+    changed.push(at);
+    written += 1;
+    remaining = retry.head.length > 0 ? retry.tail.trim() : "";
+    if (retry.head.length === 0) break;
+  }
+
+  // Bir tomon bir necha marta yangilangan bo'lishi mumkin — har biri bir marta
+  // yuboriladi (yakuniy matn bilan).
+  for (const sideIndex of Array.from(new Set(changed))) {
+    await sendSide(chatId, store.get(notebook.id) as Notebook, sideIndex);
+  }
+
+  if (remaining.length > 0) {
+    await sendMessage(
+      chatId,
+      "Matn juda uzun edi — bir qismi yozildi. Qolganini keyingi xabar qilib yuboring. 📝",
+      mainKeyboard(),
+    );
+  }
+
+  if (changed.length === 0) {
+    await sendMessage(chatId, "Matnni joylashtirib bo'lmadi. Boshqa shrift yoki qog'oz turini sinab ko'ring.", mainKeyboard());
+  }
+}
+
+/** «✍️ Matn kiritish»: daftar ro'yxatini ko'rsatadi (yoki yaratishni taklif qiladi). */
+async function offerNotebooks(chatId: number): Promise<void> {
+  const store = await books();
+  const list = store.list(chatId);
+  if (list.length === 0) {
+    await sendMessage(
+      chatId,
+      "📚 Hozircha daftaringiz yo'q.\n\nMatn yozishdan oldin ➕ Yangi daftar bilan daftar yaratishingiz kerak.",
+      newBookKeyboard(),
+    );
+    await updateSettings(chatId, { menu: "newbook" });
+    return;
+  }
+
+  const active = rawSettings(chatId).notebookId;
+  await sendMessage(
+    chatId,
+    [
+      "✍️ Qaysi daftarga yozamiz?",
+      "",
+      ...list.map((notebook) => `${notebookButton(notebook, store)}${notebook.id === active ? " ← ochiq" : ""}`),
+      "",
+      "Daftarni tanlang yoki ➕ Yangi daftar bilan yangisini oching.",
+    ].join("\n"),
+    booksKeyboard(chatId, list, store),
+  );
+  await updateSettings(chatId, { menu: "books" });
+}
+
+/** Yangi daftar yaratadi va uni ochadi. */
+async function createNotebook(chatId: number, sheets: NotebookSheets): Promise<void> {
+  const store = await books();
+  const notebook = await store.create({ chatId, sheets });
+  await updateSettings(chatId, { notebookId: notebook.id, menu: "main" });
+  await sendMessage(
+    chatId,
+    [
+      `✅ «${notebook.title}» yaratildi — ${sheets} varaq (${sheets * 2} bet).`,
+      "",
+      "Endi matn yuboring: men uni varaq tomonlariga ketma-ket yozib boraman.",
+      "Old tomonida chegara chapda, orqa tomonida — o'ngda (xuddi daftar kabi).",
+    ].join("\n"),
+    mainKeyboard(),
+  );
+}
+
 /* ------------------------------------------------------------------ */
-/* Buyruqlar va tugmalar                                               */
+/* Pastki menyu tugmalarini qayta ishlash                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Tugma matnini amalga aylantiradi. `true` qaytsa — matn menyu buyrug'i
+ * sifatida bajarildi (daftarga yozilmaydi).
+ */
+async function handleMenuLabel(chatId: number, label: string): Promise<boolean> {
+  const style = styleFor(chatId);
+
+  // 1. Menyu tugmalari.
+  if (label === L.settings) {
+    await sendMessage(chatId, settingsText(chatId), settingsKeyboard());
+    await updateSettings(chatId, { menu: "settings" });
+    return true;
+  }
+  const subMenus: [string, MenuId][] = [
+    [L.ink, "ink"],
+    [L.paper, "paper"],
+    [L.font, "fonts"],
+    [L.writing, "writing"],
+    [L.books, "books"],
+    [L.newBook, "newbook"],
+    [L.sizeMenu, "size"],
+    [L.wobbleMenu, "wobble"],
+    [L.gapMenu, "gap"],
+    [L.mathMenu, "math"],
+    [L.sendMenu, "send"],
+    [L.backMain, "main"],
+    [L.backSettings, "settings"],
+    [L.backWriting, "writing"],
+    [L.backBooks, "books"],
+    [L.backFonts, "fonts"],
+  ];
+  const subMenu = subMenus.find(([text]) => text === label);
+  if (subMenu) {
+    await openMenu(chatId, subMenu[1]);
+    return true;
+  }
+
+  if (label === L.text) {
+    await offerNotebooks(chatId);
+    return true;
+  }
+
+  // 2. Shrift sahifasini almashtirish.
+  if (label === L.prevPage || label === L.nextPage) {
+    const page = fontPageOf(chatId) + (label === L.prevPage ? -1 : 1);
+    await openFontPage(chatId, page);
+    return true;
+  }
+
+  // 3. Varaq soni tanlash (yangi daftar).
+  const sheetChoice = SHEET_BUTTONS.find((option) => option.text === unmark(label));
+  if (sheetChoice) {
+    await createNotebook(chatId, sheetChoice.sheets);
+    return true;
+  }
+
+  // 4. Daftar tanlash.
+  const store = await books();
+  if (label.startsWith("📖 ")) {
+    const title = label.slice("📖 ".length).split(" • ")[0];
+    const notebook = store.list(chatId).find((item) => item.title === title);
+    if (notebook) {
+      await updateSettings(chatId, { notebookId: notebook.id, menu: "main" });
+      await sendMessage(
+        chatId,
+        [
+          `📖 «${notebook.title}» ochildi — ${store.usedSides(notebook)}/${store.capacity(notebook)} bet band.`,
+          "",
+          "Endi matn yuboring; u ochiq varaq tomoniga yoziladi.",
+        ].join("\n"),
+        mainKeyboard(),
+      );
+      return true;
+    }
+  }
+
+  // 5. Shrift tanlash: "3 Neucha".
+  const fontMatch = /^(\d+)\s+(.+)$/.exec(unmark(label));
+  if (fontMatch) {
+    const page = fontPageOf(chatId);
+    const index = Number.parseInt(fontMatch[1], 10) - 1;
+    const entry = FONT_LIBRARY.slice(page * FONT_PAGE_SIZE, (page + 1) * FONT_PAGE_SIZE)[index];
+    if (entry) {
+      await updateSettings(chatId, { font: entry.id });
+      await sendMessage(
+        chatId,
+        `✅ Yozuv uslubi: ${fontSummary(entry.id)}\n\nKeyingi rasmlar shu shriftda chiqadi.`,
+        fontKeyboard(chatId, page, FONT_LIBRARY.slice(page * FONT_PAGE_SIZE, (page + 1) * FONT_PAGE_SIZE).map((item) => item.id)),
+      );
+      return true;
+    }
+  }
+
+  // 6. Yozuv sozlamalari qiymatlari.
+  const size = SIZE_OPTIONS.find((value) => String(value) === unmark(label));
+  if (size) {
+    const lineGap = Math.max(40, Math.round(size * 1.65));
+    await updateSettings(chatId, { fontSize: size, lineGap });
+    await sendMessage(chatId, `✅ O'lcham: ${size}px (qatorlar orasi ${lineGap}px)`, sizeKeyboard(styleFor(chatId)));
+    return true;
+  }
+
+  const wobble = WOBBLE_OPTIONS.find((option) => option.label === unmark(label));
+  if (wobble) {
+    await updateSettings(chatId, { wobble: wobble.value });
+    await sendMessage(chatId, `✅ Qo'l tebranishi: ${wobble.label}`, wobbleKeyboard(styleFor(chatId)));
+    return true;
+  }
+
+  const gap = GAP_OPTIONS.find((option) => option.label === unmark(label));
+  if (gap) {
+    const lineGap = Math.max(40, Math.round(style.fontSize * gap.ratio));
+    await updateSettings(chatId, { lineGap });
+    await sendMessage(chatId, `✅ Qator oralig'i: ${gap.label} (${lineGap}px)`, gapKeyboard(styleFor(chatId)));
+    return true;
+  }
+
+  if (unmark(label) === unmark(MATH_ON) || unmark(label) === unmark(MATH_OFF)) {
+    const next = !style.mathMode;
+    await updateSettings(chatId, { mathMode: next });
+    await sendMessage(chatId, next ? "✅ Matematika rejimi yoniq." : "✅ Matematika rejimi o'chiq.", mathKeyboard(styleFor(chatId)));
+    return true;
+  }
+
+  if (unmark(label) === unmark(SEND_PHOTO) || unmark(label) === unmark(SEND_FILE)) {
+    const asFile = unmark(label) === unmark(SEND_FILE);
+    await updateSettings(chatId, { asFile });
+    await sendMessage(chatId, asFile ? "✅ Natija PNG fayl sifatida yuboriladi." : "✅ Natija rasm sifatida yuboriladi.", sendKeyboard(chatId));
+    return true;
+  }
+
+  // 7. Siyoh ranglari va qog'oz turlari (✓ belgisi bilan keladi).
+  const ink = INK_IDS.find((id) => INK_BUTTON[id] === unmark(label));
+  if (ink) {
+    await updateSettings(chatId, { ink });
+    await sendMessage(chatId, `✅ Siyoh rangi: ${INK_LABEL[ink]} (${INK_HEX[ink]})`, inkKeyboard(styleFor(chatId)));
+    return true;
+  }
+
+  const paper = PAPER_IDS.find((id) => PAPER_SHORT[id] === unmark(label));
+  if (paper) {
+    await updateSettings(chatId, { paper });
+    await sendMessage(chatId, `✅ Qog'oz turi: ${PAPER_LABEL[paper]}`, paperKeyboard(styleFor(chatId)));
+    return true;
+  }
+
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Buyruqlar                                                           */
 /* ------------------------------------------------------------------ */
 
 /** "/size 40" kabi buyruqni bo'laklarga ajratadi (bot nomi qo'shimchasini tashlab yuboradi). */
@@ -605,22 +1224,34 @@ async function handleCommand(chatId: number, text: string): Promise<void> {
   const { command, args } = parseCommand(text);
 
   if (command === "/start" || command === "/help") {
-    await sendMessage(chatId, HELP_TEXT, settingsKeyboard(chatId));
+    await updateSettings(chatId, { menu: "main" });
+    await sendMessage(chatId, welcomeText(), mainKeyboard());
     return;
   }
 
   if (command === "/settings") {
-    await sendMessage(chatId, settingsText(chatId, isFileMode(chatId)), settingsKeyboard(chatId));
+    await sendMessage(chatId, settingsText(chatId), settingsKeyboard());
+    await updateSettings(chatId, { menu: "settings" });
     return;
   }
 
   if (command === "/id") {
-    await sendMessage(chatId, `Chat ID: ${chatId}`);
+    await sendMessage(chatId, `Chat ID: ${chatId}`, mainKeyboard());
     return;
   }
 
   if (command === "/fonts") {
-    await sendMessage(chatId, fontLibraryMessage(chatId), fontKeyboard(chatId));
+    await openFontPage(chatId, fontPageOf(chatId));
+    return;
+  }
+
+  if (command === "/books" || command === "/daftarlar") {
+    await openMenu(chatId, "books");
+    return;
+  }
+
+  if (command === "/new") {
+    await openMenu(chatId, "newbook");
     return;
   }
 
@@ -628,145 +1259,81 @@ async function handleCommand(chatId: number, text: string): Promise<void> {
     const requested = (args[0] ?? "").trim().toLowerCase().split("@")[0];
 
     if (!requested) {
-      await sendMessage(
-        chatId,
-        `Joriy yozuv uslubi: ${displayName(styleFor(chatId).font)}\n\nShriftni tugmalardan tanlang yoki /fonts bilan to'liq ro'yxatni ko'ring.`,
-        fontKeyboard(chatId),
-      );
+      await openFontPage(chatId, fontPageOf(chatId));
       return;
     }
 
     const entry = fontEntry(requested);
     if (!entry) {
-      const suggestions = POPULAR_FONTS.slice(0, 4)
-        .map((id) => `${id} — ${displayName(id)}`)
-        .join("\n");
       await sendMessage(
         chatId,
-        `"${requested}" id'li shrift topilmadi.\n\nMashhur shriftlar:\n${suggestions}\n\nBarcha ${FONT_LIBRARY.length} shrift: /fonts`,
+        `"${requested}" id'li shrift topilmadi. Kutubxonada ${FONT_LIBRARY.length} shrift bor — ${L.font} bo'limidan rasm ko'rinishida ko'ring.`,
+        mainKeyboard(),
       );
       return;
     }
 
     await updateSettings(chatId, { font: entry.id });
-    await sendMessage(
-      chatId,
-      `✅ Yozuv uslubi: ${displayName(entry.id)} (${categoryLabel(entry.category)}${entry.cyrillic ? ", kirill ✓" : ""})`,
-    );
+    await sendMessage(chatId, `✅ Yozuv uslubi: ${fontSummary(entry.id)}`, mainKeyboard());
+    return;
+  }
+
+  const quickFont = QUICK_FONTS[command];
+  if (quickFont) {
+    await updateSettings(chatId, { font: quickFont });
+    await sendMessage(chatId, `✅ Yozuv uslubi: ${fontSummary(quickFont)}`, mainKeyboard());
     return;
   }
 
   const paper = PAPER_IDS.find((id) => command === `/${id}`);
   if (paper) {
     await updateSettings(chatId, { paper });
-    await sendMessage(chatId, `✅ Qog'oz turi: ${PAPER_LABEL[paper]}`);
+    await sendMessage(chatId, `✅ Qog'oz turi: ${PAPER_LABEL[paper]}`, mainKeyboard());
     return;
   }
 
-  const inkAliases: Record<string, InkColor> = {
-    "/blue": "blue",
-    "/black": "black",
-    "/graphite": "graphite",
-    "/green": "green",
-    "/red": "red",
-    "/purple": "purple",
-  };
-  const ink = inkAliases[command];
+  const ink = INK_IDS.find((id) => command === `/${id}`);
   if (ink) {
     await updateSettings(chatId, { ink });
-    await sendMessage(chatId, `✅ Siyoh rangi: ${INK_LABEL[ink]} (${INK_HEX[ink]})`);
-    return;
-  }
-
-  // Qisqa tez tanlash: eng ko'p ishlatiladigan ikki shrift.
-  if (command === "/caveat" || command === "/marck") {
-    const font: FontId = command === "/caveat" ? "caveat" : "marck";
-    await updateSettings(chatId, { font });
-    await sendMessage(chatId, `✅ Yozuv uslubi: ${displayName(font)}`);
+    await sendMessage(chatId, `✅ Siyoh rangi: ${INK_LABEL[ink]} (${INK_HEX[ink]})`, mainKeyboard());
     return;
   }
 
   if (command === "/size") {
     const requested = Number.parseInt(args[0] ?? "", 10);
     if (!Number.isFinite(requested)) {
-      await sendMessage(chatId, `Foydalanish: /size 26..52 (masalan /size 38). Hozir: ${styleFor(chatId).fontSize}px`);
+      await sendMessage(
+        chatId,
+        `Foydalanish: /size ${SIZE_MIN}..${SIZE_MAX} (masalan /size 38). Hozir: ${styleFor(chatId).fontSize}px`,
+        mainKeyboard(),
+      );
       return;
     }
     const size = Math.min(SIZE_MAX, Math.max(SIZE_MIN, requested));
     const lineGap = Math.max(40, Math.round(size * 1.65));
     await updateSettings(chatId, { fontSize: size, lineGap });
-    await sendMessage(chatId, `✅ Shrift o'lchami: ${size}px (qatorlar orasi ${lineGap}px)`);
+    await sendMessage(chatId, `✅ Shrift o'lchami: ${size}px (qatorlar orasi ${lineGap}px)`, mainKeyboard());
     return;
   }
 
   if (command === "/file") {
     const next = !isFileMode(chatId);
     await updateSettings(chatId, { asFile: next });
-    await sendMessage(chatId, next ? "✅ Endi natija PNG fayl sifatida yuboriladi." : "✅ Endi natija rasm sifatida yuboriladi.");
+    await sendMessage(
+      chatId,
+      next ? "✅ Endi natija PNG fayl sifatida yuboriladi." : "✅ Endi natija rasm sifatida yuboriladi.",
+      mainKeyboard(),
+    );
     return;
   }
 
-  // Noma'lum buyruq: uni oddiy matn kabi render qilib ko'ramiz.
+  // Noma'lum buyruq: yordam matnini ko'rsatamiz.
   if (command.startsWith("/") && args.length === 0 && command.length <= 12) {
-    await sendMessage(chatId, `Bunday buyruqni bilmayman: ${command}\n\n${HELP_TEXT}`);
-    return;
-  }
-  await handleRender(chatId, text);
-}
-
-/** Inline tugma bosilganda sozlamani yangilaydi (qayta render qilinmaydi). */
-async function handleCallback(query: TgCallbackQuery): Promise<void> {
-  const chatId = query.message?.chat?.id;
-  const data = query.data ?? "";
-  if (!chatId) {
-    await tg("answerCallbackQuery", { callback_query_id: query.id }).catch(() => undefined);
+    await sendMessage(chatId, `Bunday buyruqni bilmayman: ${command}\n\n${HELP_TEXT}`, mainKeyboard());
     return;
   }
 
-  const [kind, value] = data.split(":");
-  let confirmation = "";
-
-  if (kind === "paper" && PAPER_IDS.includes(value as PaperType)) {
-    await updateSettings(chatId, { paper: value as PaperType });
-    confirmation = `✅ ${PAPER_LABEL[value as PaperType]}`;
-  } else if (kind === "ink" && INK_IDS.includes(value as InkColor)) {
-    await updateSettings(chatId, { ink: value as InkColor });
-    confirmation = `✅ ${INK_LABEL[value as InkColor]}`;
-  } else if (kind === "font" && fontEntry(value)) {
-    await updateSettings(chatId, { font: value });
-    confirmation = `✅ Yozuv uslubi: ${displayName(value)}`;
-  } else if (kind === "file" || (kind === "toggle" && value === "file")) {
-    const next = !isFileMode(chatId);
-    await updateSettings(chatId, { asFile: next });
-    confirmation = next ? "✅ PNG fayl sifatida yuboraman" : "✅ Rasm sifatida yuboraman";
-  } else if (kind === "open" && value === "fonts") {
-    await tg("answerCallbackQuery", { callback_query_id: query.id, text: "✍️ Shriftlar" }).catch(() => undefined);
-    await sendMessage(chatId, fontLibraryMessage(chatId), fontKeyboard(chatId));
-    return;
-  } else if (kind === "open" && value === "settings") {
-    confirmation = "⚙️ Sozlamalar";
-    await tg("answerCallbackQuery", { callback_query_id: query.id, text: confirmation }).catch(() => undefined);
-    await sendMessage(chatId, settingsText(chatId, isFileMode(chatId)), settingsKeyboard(chatId));
-    return;
-  } else {
-    await tg("answerCallbackQuery", { callback_query_id: query.id }).catch(() => undefined);
-    return;
-  }
-
-  await tg("answerCallbackQuery", { callback_query_id: query.id, text: confirmation }).catch(() => undefined);
-  await sendMessage(chatId, `${confirmation}. Keyingi matningiz shu uslubda chiqadi.`);
-
-  // Tugmalar qaysi xabardan bosilgan bo'lsa, o'sha xabarning klaviaturasini
-  // yangilaymiz: /settings panelida ✓ belgilari, rasm ostida tez tugmalar.
-  const message = query.message;
-  if (message) {
-    const fromSettingsPanel = (message.text ?? "").startsWith("⚙️");
-    await tg("editMessageReplyMarkup", {
-      chat_id: chatId,
-      message_id: message.message_id,
-      reply_markup: fromSettingsPanel ? settingsKeyboard(chatId) : quickKeyboard(chatId),
-    }).catch(() => undefined);
-  }
+  await writeToNotebook(chatId, text);
 }
 
 /* ------------------------------------------------------------------ */
@@ -774,11 +1341,6 @@ async function handleCallback(query: TgCallbackQuery): Promise<void> {
 /* ------------------------------------------------------------------ */
 
 async function processUpdate(update: TgUpdate): Promise<void> {
-  if (update.callback_query) {
-    await handleCallback(update.callback_query);
-    return;
-  }
-
   const message = update.message;
   if (!message?.chat || typeof message.text !== "string") return;
 
@@ -789,7 +1351,10 @@ async function processUpdate(update: TgUpdate): Promise<void> {
     await handleCommand(chatId, text);
     return;
   }
-  await handleRender(chatId, text);
+
+  if (await handleMenuLabel(chatId, text)) return;
+
+  await writeToNotebook(chatId, text);
 }
 
 /** Bitta update xato bersa ham bot yiqilmaydi: foydalanuvchiga qisqa uzr yuboramiz. */
@@ -798,11 +1363,12 @@ async function processUpdateSafely(update: TgUpdate): Promise<void> {
     await processUpdate(update);
   } catch (error) {
     console.error("Update bajarilmadi:", error);
-    const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
+    const chatId = update.message?.chat?.id;
     if (chatId) {
       await sendMessage(
         chatId,
         "Kechirasiz, kutilmagan xatolik bo'ldi. Matnni qaytadan yuborib ko'ring. 🙏",
+        mainKeyboard(),
       ).catch(() => undefined);
     }
   }
@@ -891,6 +1457,7 @@ async function startWebhook(baseUrl: string): Promise<void> {
 
 async function printInfo(): Promise<void> {
   const me = await tg<{ id: number; username?: string; first_name?: string; can_join_groups?: boolean }>("getMe");
+
   const hook = await tg<{ url?: string; pending_update_count?: number; last_error_message?: string }>(
     "getWebhookInfo",
   );
@@ -901,6 +1468,10 @@ async function printInfo(): Promise<void> {
   console.log(`   id        : ${me.id}`);
   console.log("✍️  Shriftlar:");
   console.log(`   kutubxona : ${FONT_LIBRARY.length} shrift (${FONT_LIBRARY.filter((entry) => entry.cyrillic).length} ta kirill)`);
+  console.log("🖋  Siyoh rangi:");
+  console.log(`   ${INK_OPTIONS.map((option) => `${option.id} (${option.hex})`).join(", ")}`);
+  console.log("📚 Daftar bazasi:");
+  console.log(`   fayllar   : ${DATA_DIR} (settings.json, notebooks.json)`);
   console.log("🌐 Webhook:");
   console.log(`   url       : ${hook.url || "(yo'q — long polling ishlatiladi)"}`);
   console.log(`   kutilayotgan update: ${hook.pending_update_count ?? 0}`);
@@ -963,6 +1534,7 @@ const entry = process.argv[1];
 if (entry && resolve(entry) === resolve(fileURLToPath(import.meta.url))) {
   void (async () => {
     settingsCache = await loadSettings();
+    notebookStore = await createStore(DATA_DIR);
     await main();
   })().catch((error) => {
     console.error("Bot to'xtab qoldi:", error);

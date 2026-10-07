@@ -14,6 +14,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";
 import { renderNotebook } from "../src/lib/handwriting/render";
 import { FALLBACK_FONT_ID, FONT_LIBRARY, fontEntry } from "../src/lib/handwriting/fonts.generated";
+import { INK_OPTIONS } from "../src/lib/handwriting/options";
 import type { NotebookStyle } from "../src/lib/handwriting/types";
 
 const FONT_DIR = new URL("../src/assets/fonts/", import.meta.url);
@@ -164,10 +165,91 @@ function widestInkRow(png: PNG): { y: number; count: number } {
     let count = 0;
     for (let x = INK_MARGIN; x < png.width; x += 1) {
       if (isInk(png, x, y)) count += 1;
-    }
-    if (count > best.count) best = { y, count };
+    }        if (count > best.count) best = { y, count };
   }
   return best;
+}
+
+interface MeasuredInk {
+  count: number;
+  r: number;
+  g: number;
+  b: number;
+}
+
+/**
+ * Chizilgan varaqadagi siyohning rangini o'lchaydi. Eng quyuq piksellar
+ * siyohning "toza" rangiga eng yaqin bo'ladi (qog'oz rangi aralashmasi kam).
+ */
+function measureInk(png: PNG, threshold = 150): MeasuredInk {
+  const pixels: { r: number; g: number; b: number; lum: number }[] = [];
+  for (let y = 0; y < png.height; y += 1) {
+    for (let x = INK_MARGIN; x < png.width; x += 1) {
+      const index = (png.width * y + x) << 2;
+      const r = png.data[index];
+      const g = png.data[index + 1];
+      const b = png.data[index + 2];
+      const lum = (r + g + b) / 3;
+      if (lum < threshold) pixels.push({ r, g, b, lum });
+    }
+  }
+  if (pixels.length === 0) return { count: 0, r: 0, g: 0, b: 0 };
+
+  pixels.sort((a, b) => a.lum - b.lum);
+  const sample = pixels.slice(0, Math.max(20, Math.round(pixels.length * 0.05)));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  for (const pixel of sample) {
+    r += pixel.r;
+    g += pixel.g;
+    b += pixel.b;
+  }
+  return { count: pixels.length, r: r / sample.length, g: g / sample.length, b: b / sample.length };
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const value = Number.parseInt(hex.replace("#", ""), 16);
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+}
+
+/** O'lchangan siyoh rangiga eng yaqin inkni topadi. */
+function nearestInk(measured: MeasuredInk) {
+  let best = INK_OPTIONS[0];
+  let bestDistance = Infinity;
+  for (const option of INK_OPTIONS) {
+    const [r, g, b] = hexToRgb(option.hex);
+    const distance = (r - measured.r) ** 2 + (g - measured.g) ** 2 + (b - measured.b) ** 2;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = option;
+    }
+  }
+  return best;
+}
+
+/**
+ * Qizil chegara chizig'ining x koordinatasi. Varaqaning yarmidan ko'prog'ida
+ * qizil (r > g va r > b) piksellar bo'lgan ustunni qidiradi; topilmasa -1.
+ */
+function marginColumn(png: PNG): number {
+  let bestX = -1;
+  let bestCount = 0;
+  for (let x = 0; x < png.width; x += 1) {
+    let count = 0;
+    for (let y = 0; y < png.height; y += 1) {
+      const index = (png.width * y + x) << 2;
+      const r = png.data[index];
+      const g = png.data[index + 1];
+      const b = png.data[index + 2];
+      if (r - g > 30 && r - b > 20) count += 1;
+    }
+    if (count > bestCount) {
+      bestCount = count;
+      bestX = x;
+    }
+  }
+  return bestCount > png.height * 0.5 ? bestX : -1;
 }
 
 function asciiPreview(png: PNG, columns: number, rows: number): string {
@@ -436,6 +518,78 @@ async function verifySizeNormalization(): Promise<void> {
   );
 }
 
+/** 10 xil siyoh rangi haqiqatan ajralib turishini o'lchaydi. */
+async function verifyInkColors(): Promise<void> {
+  console.log("\n=== siyoh ranglari ===");
+  const fonts = await loadFonts();
+  assert(INK_OPTIONS.length === 10, `kutubxonada ${INK_OPTIONS.length} xil siyoh rangi (maksimum 10 ta)`);
+
+  const recognized = new Set<string>();
+  for (const option of INK_OPTIONS) {
+    const result = await renderNotebook({
+      text: LITERATURE,
+      style: { paper: "plain", ink: option.id, marginLine: false, seed: 11, fontSize: 40, lineGap: 64 },
+      fonts,
+    });
+    const png = PNG.sync.read(Buffer.from(result.pages[0].png));
+    const measured = measureInk(png);
+    const nearest = nearestInk(measured);
+    if (nearest.id === option.id) recognized.add(option.id);
+    assert(
+      measured.count > 300 && nearest.id === option.id,
+      `${option.id.padEnd(9)} ${option.label.padEnd(12)} siyoh ${String(measured.count).padStart(
+        5,
+      )} px, o'lchangan rang: ${nearest.id}`,
+    );
+  }
+  assert(
+    recognized.size === INK_OPTIONS.length,
+    `barcha ${INK_OPTIONS.length} siyoh rangi alohida tanildi (${recognized.size})`,
+  );
+}
+
+/**
+ * Daftar kabi: keyingi varaqning qizil chegarasi o'ng tomonda bo'lishini va
+ * matn shu tomonga moslashishini tekshiradi.
+ */
+async function verifyPageSides(): Promise<void> {
+  console.log("\n=== varaq tomonlari (qizil chegara) ===");
+  const fonts = await loadFonts();
+  const long = Array.from({ length: 60 }, (_, index) => `Qator ${index + 1}: Salom, daftar!`).join("\n");
+  const style: Partial<NotebookStyle> = { paper: "lined", fontSize: 40, lineGap: 60, seed: 7 };
+
+  const front = await renderNotebook({ text: long, style, fonts });
+  assert(front.pages.length >= 3, `uzun matn ${front.pages.length} varaqqa bo'lindi`);
+
+  const frontPngs = front.pages.map((page) => PNG.sync.read(Buffer.from(page.png)));
+  const columns = frontPngs.map((png) => marginColumn(png));
+  const bounds = frontPngs.map((png) => inkBounds(png));
+
+  front.pages.forEach((page, index) => {
+    const expected = index % 2 === 0 ? "recto" : "verso";
+    assert(page.side === expected, `${page.index}-varaq tomoni: ${page.side} (kutilgan ${expected})`);
+  });
+  assert(columns[0] > 0 && columns[0] < front.pages[0].width / 2, `1-varaqda chegara chapda (x = ${columns[0]})`);
+  assert(columns[1] > front.pages[1].width / 2, `2-varaqda chegara o'ngda (x = ${columns[1]})`);
+  assert(
+    bounds[0].minX > columns[0] && bounds[1].minX < columns[1],
+    `matn chegaraga mos: 1-varaqda chegaradan o'ngda (${bounds[0].minX} > ${columns[0]}), 2-varaqda chapda (${bounds[1].minX} < ${columns[1]})`,
+  );
+
+  // Orqa tomondan boshlansa, tomonlar teskari bo'ladi.
+  const back = await renderNotebook({ text: long, style: { ...style, startSide: "verso" }, fonts });
+  assert(back.pages[0].side === "verso", `startSide: "verso" bilan birinchi varaq orqa tomon (${back.pages[0].side})`);
+  const backColumns = back.pages.map((page) => marginColumn(PNG.sync.read(Buffer.from(page.png))));
+  assert(
+    backColumns[0] > back.pages[0].width / 2,
+    `"verso" boshlanishda 1-varaqda chegara o'ngda (x = ${backColumns[0]})`,
+  );
+  assert(
+    backColumns[1] > 0 && backColumns[1] < back.pages[1].width / 2,
+    `keyingi varaqda chegara chapda (x = ${backColumns[1]})`,
+  );
+}
+
 async function verifyPagination(): Promise<void> {
   const long = Array.from({ length: 80 }, (_, index) => `Mashq ${index + 1}: x^2 + ${index} = 0`).join("\n");
   const result = await renderNotebook({ text: long, style: { seed: 41 }, fonts: await loadFonts() });
@@ -458,6 +612,8 @@ async function main(): Promise<void> {
   await verifyFontLibrary();
   await verifyFallbackFont();
   await verifySizeNormalization();
+  await verifyInkColors();
+  await verifyPageSides();
   await verifyPagination();
 
   console.log(`\nNatijalar: ${OUT_DIR}`);

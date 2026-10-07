@@ -24,8 +24,14 @@ export interface LayoutResult {
   paper: PaperLayout;
   /** Birinchi qatorning asosiy chizig'i (baseline) y koordinatasi. */
   firstBaseline: number;
-  /** Matn boshlanadigan x koordinatasi. */
+  /** Old tomon (recto) uchun matn boshlanadigan x koordinatasi. */
   textLeft: number;
+  /**
+   * Orqa tomon (verso) uchun matn boshlanadigan x koordinatasi: chegara o'ng
+   * tomonda bo'lgani uchun matn chap chetdan boshlanadi. Ikkala tomonning matn
+   * kengligi teng — shu sababli qatorlarga bo'linish bir xil qoladi.
+   */
+  versoTextLeft: number;
 }
 
 /** Qo'lyozmada ko'p uchraydigan "bir xil ma'noli" belgilar. */
@@ -289,9 +295,17 @@ export function layoutText(options: LayoutOptions): LayoutResult {
   const ruleTop = Math.round(92 * k);
   const bottomMargin = Math.round(72 * k);
   const marginLeft = Math.round(style.marginLeft * k);
-  const textLeft = marginLeft + Math.round(20 * k);
-  const textRight = width - Math.round(56 * k);
-  const maxWidth = Math.max(80, textRight - textLeft);
+  const edgeGap = Math.round(56 * k);
+  const marginGap = Math.round(20 * k);
+  // Old tomon (recto): qizil chegara chapda, matn undan keyin boshlanadi.
+  const textLeft = marginLeft + marginGap;
+  const textRight = width - edgeGap;
+  // Orqa tomon (verso): chegara o'ngda, matn chap chetdan boshlanadi.
+  const versoTextLeft = edgeGap;
+  const versoTextRight = width - marginLeft - marginGap;
+  // Ikkala tomonning matn kengligi teng bo'lishi shart (bir xil qatorlarga
+  // bo'linishi uchun); minimal qiymatdan foydalanamiz.
+  const maxWidth = Math.max(80, Math.min(textRight - textLeft, versoTextRight - versoTextLeft));
 
   const mathFont: MathFont = {
     advance: (ch) => {
@@ -358,6 +372,7 @@ export function layoutText(options: LayoutOptions): LayoutResult {
     paper,
     firstBaseline: ruleTop + lineGap - Math.round(3 * k),
     textLeft,
+    versoTextLeft,
   };
 }
 

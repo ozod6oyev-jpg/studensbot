@@ -12,6 +12,7 @@ export const PAPER_OPTIONS: { id: PaperType; label: string; hint: string }[] = [
   { id: "plain", label: "Toza", hint: "Chiziqsiz oq varaq" },
 ];
 
+/** Siyoh ranglari — maksimum 10 ta (hammasi bir-biridan ajralib turadi). */
 export const INK_OPTIONS: { id: InkColor; label: string; hex: string }[] = [
   { id: "blue", label: "Ko'k ruchka", hex: "#1B3E8F" },
   { id: "black", label: "Qora ruchka", hex: "#1F1F26" },
@@ -19,6 +20,10 @@ export const INK_OPTIONS: { id: InkColor; label: string; hex: string }[] = [
   { id: "green", label: "Yashil", hex: "#1F6B4A" },
   { id: "red", label: "Qizil", hex: "#B3253B" },
   { id: "purple", label: "Siyohrang", hex: "#5B3A8E" },
+  { id: "orange", label: "To'q sariq", hex: "#C2571A" },
+  { id: "pink", label: "Pushti", hex: "#C2185B" },
+  { id: "teal", label: "Havorang", hex: "#0E7490" },
+  { id: "brown", label: "Jigarrang", hex: "#6B4226" },
 ];
 
 /* ------------------------------------------------------------------ */

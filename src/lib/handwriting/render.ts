@@ -63,6 +63,13 @@ async function renderPage(
   const { canvas, coverage, alphaMap, rgba } = buffers;
   const width = layout.paper.width;
   const height = layout.paper.height;
+
+  // Varaqning tomoni: birinchi varaq `style.startSide` bilan boshlanadi,
+  // keyingilari almashadi — haqiqiy daftardagidek. Orqa tomonda qizil chegara
+  // o'ng tomonda bo'ladi va matn chap chetdan boshlanadi.
+  const verso = style.startSide === "verso" ? index % 2 === 0 : index % 2 === 1;
+  const textLeft = verso ? layout.versoTextLeft : layout.textLeft;
+  const pagePaper = verso ? { ...layout.paper, marginOnRight: true } : layout.paper;
   const rng = createRng(style.seed * 2654435761 + index * 40503);
   const groups: Group[] = [];
   const lineState = { slope: 0, offset: 0 };
@@ -112,7 +119,7 @@ async function renderPage(
 
       const advance = glyphAdvance(handle, ch) * size;
       const dx = rng.signed() * jitterAmount;
-      const dy = rng.signed() * jitterAmount * 0.7 + lineState.slope * (x - layout.textLeft) * 0.35 + lineState.offset;
+      const dy = rng.signed() * jitterAmount * 0.7 + lineState.slope * (x - textLeft) * 0.35 + lineState.offset;
       const angle = rng.signed() * style.wobble * 0.05;
       const scale = 1 + rng.signed() * style.wobble * 0.025;
       const alphaMod = alpha * (1 - rng.next() * style.wobble * 0.18);
@@ -142,7 +149,7 @@ async function renderPage(
       const strokes = symbolStrokes(ch);
       if (strokes.length === 0) return;
       const dx = rng.signed() * jitterAmount * 0.6;
-      const dy = rng.signed() * jitterAmount * 0.5 + lineState.slope * (x - layout.textLeft) * 0.35;
+      const dy = rng.signed() * jitterAmount * 0.5 + lineState.slope * (x - textLeft) * 0.35;
       const contours = strokeToContours(strokes, size, x + dx, baseline + dy);
       const alphaMod = alpha * (1 - rng.next() * style.wobble * 0.16);
       for (const contour of contours) pushInk([contour], alphaMod);
@@ -164,7 +171,7 @@ async function renderPage(
     lineState.offset = rng.signed() * style.wobble * 1.6;
     const lineBaseline = baselineForLine(lineIndex, layout);
     for (const placed of line.atoms) {
-      placed.atom.render(sink, layout.textLeft + placed.x, lineBaseline, 1);
+      placed.atom.render(sink, textLeft + placed.x, lineBaseline, 1);
     }
   });
 
@@ -202,7 +209,7 @@ async function renderPage(
   }
 
   const coverageBuffer = canvas.resolve(coverage);
-  paintPaper(rgba, layout.paper, style);
+  paintPaper(rgba, pagePaper, style);
   const [inkR, inkG, inkB] = parseInk(inkHex(style.ink));
 
   for (let i = 0, p = 0; i < coverageBuffer.length; i += 1, p += 4) {
@@ -222,6 +229,7 @@ async function renderPage(
     height,
     png,
     rgba,
+    side: verso ? "verso" : "recto",
   };
 }
 

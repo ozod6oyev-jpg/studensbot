@@ -2,9 +2,14 @@
  * Botning butun oqimini tekshiradi: `bun run check:bot`
  *
  * Mahalliy "soxta Telegram" server ko'tariladi, bot unga ulanadi va haqiqiy
- * update yuboriladi. Test botning Telegram API bilan qanday gaplashishini
- * (getMe, getUpdates, sendChatAction, sendPhoto, sendMessage) va yuborilgan
- * rasm haqiqiy PNG ekanini tekshiradi — token talab qilinmaydi.
+ * update yuboriladi. Tekshiriladi:
+ *   1. `/start` — salomlashuv va pastdagi (reply) menyu;
+ *   2. daftar yaratish (12 varaq) va matnni varaq-tomonga yozish;
+ *   3. varaqning orqa tomonida qizil chegara O'NGDA bo'lishi (piksel orqali);
+ *   4. sozlamalar bo'limlari: 10 siyoh, 3 qog'oz, yozuv uslubi (rasm varaqasi);
+ *   5. `/fonts` ham rasm ko'rinishida kelishi va daftarlar ro'yxati.
+ *
+ * Token talab qilinmaydi: TELEGRAM_API_BASE mock serverga qaratiladi.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -12,17 +17,33 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PNG } from "pngjs";
 
 const BOT_ENTRY = fileURLToPath(new URL("../bot/index.ts", import.meta.url));
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const TEST_CHAT_ID = 4242;
 
+/** Pastdagi menyu tugmalari (bot bilan bir xil matnlar). */
+const BTN = {
+  text: "✍️ Matn kiritish",
+  settings: "⚙️ Sozlamalar",
+  ink: "🖋 Siyoh rangi",
+  paper: "📄 Qog'oz turi",
+  font: "✍️ Yozuv uslubi",
+  writing: "📐 Yozuv sozlamalari",
+  books: "📚 Daftarlar",
+  newBook: "➕ Yangi daftar",
+} as const;
+
 interface ReceivedPhoto {
   bytes: Buffer;
   caption: string;
+  markup: string;
+  method: string;
 }
 interface ReceivedText {
   text: string;
+  markup: string;
 }
 
 let failures = 0;
@@ -49,10 +70,22 @@ function partBytes(body: Buffer, boundary: string, field: string): Buffer | null
   return body.subarray(start, end);
 }
 
-/** multipart tanasidan matn maydonini o'qiydi. */
+/** multipart tanasidan matn maydonini o'qiydi (oxiridagi qator uzunishini olib tashlaydi). */
 function partText(body: Buffer, boundary: string, field: string): string {
   const bytes = partBytes(body, boundary, field);
-  return bytes ? bytes.toString("utf8") : "";
+  return bytes ? bytes.toString("utf8").replace(/\r?\n?$/, "").replace(/\r$/, "") : "";
+}
+
+/** Klaviaturadagi barcha tugma matnlari. */
+function keyboardLabels(markup: string): string[] {
+  if (!markup) return [];
+  try {
+    const parsed = JSON.parse(markup) as { keyboard?: { text: string }[][] };
+    if (!parsed.keyboard) return [];
+    return parsed.keyboard.flat().map((button) => button.text);
+  } catch {
+    return [];
+  }
 }
 
 interface MockTelegram {
@@ -61,6 +94,7 @@ interface MockTelegram {
   photos: ReceivedPhoto[];
   texts: ReceivedText[];
   calls: string[];
+  push(update: unknown): void;
 }
 
 async function startMockTelegram(): Promise<MockTelegram> {
@@ -89,8 +123,6 @@ async function startMockTelegram(): Promise<MockTelegram> {
         case "deleteWebhook":
         case "setWebhook":
         case "sendChatAction":
-        case "answerCallbackQuery":
-        case "editMessageReplyMarkup":
           reply({ ok: true, result: true });
           break;
         case "getUpdates": {
@@ -100,8 +132,11 @@ async function startMockTelegram(): Promise<MockTelegram> {
           break;
         }
         case "sendMessage": {
-          const parsed = JSON.parse(body.toString("utf8") || "{}") as { text?: string };
-          texts.push({ text: parsed.text ?? "" });
+          const parsed = JSON.parse(body.toString("utf8") || "{}") as { text?: string; reply_markup?: unknown };
+          texts.push({
+            text: parsed.text ?? "",
+            markup: parsed.reply_markup ? JSON.stringify(parsed.reply_markup) : "",
+          });
           reply({ ok: true, result: { message_id: texts.length } });
           break;
         }
@@ -117,6 +152,8 @@ async function startMockTelegram(): Promise<MockTelegram> {
           photos.push({
             bytes: Buffer.from(file),
             caption: partText(body, boundary, "caption"),
+            markup: partText(body, boundary, "reply_markup"),
+            method,
           });
           reply({ ok: true, result: { message_id: photos.length } });
           break;
@@ -138,11 +175,40 @@ async function startMockTelegram(): Promise<MockTelegram> {
     texts,
     calls,
     push: (update: unknown) => updates.push(update),
-  } as MockTelegram & { push: (update: unknown) => void };
+  };
 }
 
 function pngSize(bytes: Buffer): { width: number; height: number } {
   return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+/**
+ * Qizil chegara chizig'ining x koordinatasi. Chegara rangi (214, 85, 106) —
+ * qog'ozdan ancha qizg'ish, shuning uchun eng ko'p "qizil" piksel yig'ilgan
+ * ustunni qidiramiz.
+ */
+function marginColumnX(bytes: Buffer): number {
+  const png = PNG.sync.read(bytes);
+  const { width, height, data } = png;
+  let best = -1;
+  let bestCount = 0;
+
+  for (let x = 0; x < width; x += 1) {
+    let count = 0;
+    for (let y = 0; y < height; y += 1) {
+      const index = (y * width + x) << 2;
+      const r = data[index];
+      const g = data[index + 1];
+      const b = data[index + 2];
+      if (r > 150 && r - g > 40 && r - b > 25) count += 1;
+    }
+    if (count > bestCount) {
+      bestCount = count;
+      best = x;
+    }
+  }
+  void height;
+  return bestCount >= 50 ? best : -1;
 }
 
 async function waitFor(condition: () => boolean, timeoutMs: number, label: string): Promise<void> {
@@ -155,9 +221,9 @@ async function waitFor(condition: () => boolean, timeoutMs: number, label: strin
 }
 
 async function main(): Promise<void> {
-  const mock = (await startMockTelegram()) as MockTelegram & { push: (update: unknown) => void };
+  const mock = await startMockTelegram();
   const dataDir = await mkdtemp(join(tmpdir(), "daftar-bot-"));
-  console.log(`Mock Telegram: http://127.0.0.1:${mock.port}  (sozlamalar: ${dataDir})`);
+  console.log(`Mock Telegram: http://127.0.0.1:${mock.port}  (ma'lumotlar: ${dataDir})`);
 
   const child: ChildProcess = spawn("bun", [BOT_ENTRY], {
     env: {
@@ -173,144 +239,208 @@ async function main(): Promise<void> {
   child.stdout?.on("data", (chunk: Buffer) => logs.push(chunk.toString("utf8")));
   child.stderr?.on("data", (chunk: Buffer) => logs.push(chunk.toString("utf8")));
 
+  let updateId = 0;
+  /** Foydalanuvchi matn yuboradi (xuddi Telegram'dan kelgandek). */
+  const send = (text: string): void => {
+    updateId += 1;
+    mock.push({
+      update_id: updateId,
+      message: { message_id: updateId, chat: { id: TEST_CHAT_ID, type: "private" }, text },
+    });
+  };
+
   try {
     await waitFor(() => mock.calls.includes("getUpdates"), 15000, "bot polling boshlandi");
 
-    console.log("\n=== 1-holat: oddiy matn ===");
-    mock.push({
-      update_id: 1,
-      message: {
-        message_id: 1,
-        chat: { id: TEST_CHAT_ID, type: "private" },
-        text: "Salom! x^2 + \\frac{1}{2} = 0",
-      },
-    });
-    await waitFor(() => mock.photos.length >= 1, 30000, "birinchi rasm");
-
-    const first = mock.photos[0];
-    assert(first.bytes.subarray(0, 8).equals(PNG_SIGNATURE), "yuborilgan fayl haqiqiy PNG");
-    const size = pngSize(first.bytes);
+    console.log("\n=== 1-holat: /start va pastdagi menyu ===");
+    send("/start");
+    await waitFor(() => mock.texts.some((entry) => entry.text.includes("Assalomu alaykum")), 15000, "salomlashuv");
+    const greeting = mock.texts.filter((entry) => entry.text.includes("Assalomu alaykum")).pop();
+    const greetingKeys = keyboardLabels(greeting?.markup ?? "");
+    assert(Boolean(greeting), "birinchi /start da salomlashuv yuborildi");
     assert(
-      size.width === 1240 && size.height === 1754,
-      `varaq o'lchami A4 (${size.width}x${size.height})`,
+      greetingKeys.length === 2 && greetingKeys.includes(BTN.text) && greetingKeys.includes(BTN.settings),
+      `pastdagi menyuda 2 ta tugma bor (${greetingKeys.join(", ")})`,
     );
-    assert(first.bytes.byteLength > 20_000, `rasm siqilmagan, ${Math.round(first.bytes.byteLength / 1024)} KB`);
-    assert(first.caption.includes("yo'l-yo'l daftar"), `izohda qog'oz turi bor: "${first.caption.split("\n")[0]}"`);
-    assert(first.caption.includes("varaq"), "izohda varaq raqami bor");
+    assert(
+      (greeting?.markup ?? "").includes('"resize_keyboard":true'),
+      "klaviatura pastdagi menyu sifatida (reply keyboard) yuborildi",
+    );
 
-    console.log("\n=== 2-holat: /grid buyrug'i va keyingi matn ===");
-    mock.push({
-      update_id: 2,
-      message: { message_id: 2, chat: { id: TEST_CHAT_ID, type: "private" }, text: "/grid" },
-    });
+    console.log("\n=== 2-holat: daftar yo'q — matn kiritish tugmasi ===");
+    send(BTN.text);
+    await waitFor(() => mock.texts.some((entry) => entry.text.includes("daftaringiz yo'q")), 15000, "daftar yo'q javobi");
+    const emptyBooks = mock.texts.filter((entry) => entry.text.includes("daftaringiz yo'q")).pop();
+    const createKeys = keyboardLabels(emptyBooks?.markup ?? "");
+    assert(
+      ["12 varaq", "36 varaq", "48 varaq", "96 varaq"].every((label) => createKeys.includes(label)),
+      `yangi daftar yaratish tugmalari ko'rsatildi (${createKeys.join(", ")})`,
+    );
+
+    console.log("\n=== 3-holat: 12 varaqli daftar yaratish ===");
+    send("12 varaq");
+    await waitFor(() => mock.texts.some((entry) => entry.text.includes("yaratildi")), 20000, "daftar yaratildi");
+    const created = mock.texts.filter((entry) => entry.text.includes("yaratildi")).pop();
+    assert(
+      Boolean(created) && created!.text.includes("12 varaq") && created!.text.includes("24 bet"),
+      `daftar 12 varaq (24 bet) bilan yaratildi: "${created?.text.split("\n")[0]}"`,
+    );
+    assert(
+      keyboardLabels(created?.markup ?? "").includes(BTN.settings),
+      "yaratishdan keyin asosiy menyu qaytdi",
+    );
+
+    console.log("\n=== 4-holat: matn varaqqa yozilishi (old tomon) ===");
+    send("Salom! x^2 + \\frac{1}{2} = 0");
+    await waitFor(() => mock.photos.length >= 1, 40000, "birinchi varaqa rasmi");
+    const firstPage = mock.photos[0];
+    assert(firstPage.bytes.subarray(0, 8).equals(PNG_SIGNATURE), "yuborilgan fayl haqiqiy PNG");
+    const size = pngSize(firstPage.bytes);
+    assert(size.width === 1240 && size.height === 1754, `varaq A4 o'lchamda (${size.width}x${size.height})`);
+    assert(firstPage.caption.includes("varaq"), `izohda varaq raqami bor: "${firstPage.caption.split("\n")[0]}"`);
+    assert(firstPage.caption.includes("old tomoni"), "birinchi bet — old tomoni deb belgilandi");
+    assert(
+      firstPage.markup.includes('"keyboard"'),
+      "rasm ostida ham pastdagi menyu yuborildi",
+    );
+    const rectoMargin = marginColumnX(firstPage.bytes);
+    assert(rectoMargin > 0 && rectoMargin < 400, `old tomonda qizil chegara chapda (x = ${rectoMargin})`);
+
+    console.log("\n=== 5-holat: varaq to'lgach keyingi bet — orqa tomon ===");
+    const beforeLong = mock.photos.length;
+    const versoOf = (from: number): ReceivedPhoto | undefined =>
+      mock.photos.slice(from).find((photo) => photo.caption.includes("orqa tomoni"));
+    // Diqqat: standart uslubda A4 betiga ~2000 belgi sig'adi, shuning uchun
+    // matn bir betga sig'masligi uchun ancha uzun yuboramiz (~3800 belgi).
+    send(
+      "Daftar varaqlari ketma-ket to'ladi. ".repeat(105) +
+        "Har bir yangi betda chegara tomoni almashadi — xuddi haqiqiy daftardagidek.",
+    );
+    // Orqa tomon rasmi kelguncha kutamiz: uzun matn ikkinchi betga o'tadi.
+    await waitFor(() => Boolean(versoOf(beforeLong)), 90000, "orqa tomon (verso) rasmi");
+    const batch = mock.photos.slice(beforeLong);
+    assert(
+      batch.some((photo) => photo.caption.includes("old tomoni")),
+      `uzun matn joriy betni to'ldirdi (${batch.length} ta rasm)`,
+    );
+    const verso = versoOf(beforeLong);
+    if (verso) {
+      const versoMargin = marginColumnX(verso.bytes);
+      assert(versoMargin > 900, `orqa tomonda qizil chegara o'ngda (x = ${versoMargin})`);
+      assert(
+        verso.caption.includes("1/12 varaq") && verso.caption.includes("2-bet"),
+        `izohda varaq va bet raqami to'g'ri: "${verso.caption.split("\n")[0]}"`,
+      );
+    } else {
+      assert(false, "orqa tomon rasmi topilmadi");
+    }
+
+    console.log("\n=== 6-holat: sozlamalar menyusi ===");
+    send(BTN.settings);
+    await waitFor(() => mock.texts.some((entry) => entry.text.startsWith("⚙️ Sozlamalar")), 15000, "sozlamalar");
+    const settings = mock.texts.filter((entry) => entry.text.startsWith("⚙️ Sozlamalar")).pop();
+    const settingsKeys = keyboardLabels(settings?.markup ?? "");
+    assert(
+      [BTN.ink, BTN.paper, BTN.font, BTN.writing, BTN.books].every((label) => settingsKeys.includes(label)),
+      `sozlamalar bo'limlari alohida tugmalarda (${settingsKeys.length} tugma)`,
+    );
+
+    console.log("\n=== 7-holat: siyoh rangi (10 xil) ===");
+    send(BTN.ink);
+    const inkMenuOf = (): ReceivedText | undefined =>
+      mock.texts.filter((entry) => entry.text.startsWith("🖋 Siyoh rangi —")).pop();
+    await waitFor(() => Boolean(inkMenuOf()), 20000, "siyoh menyusi");
+    const inkMenu = inkMenuOf();
+    const inkKeys = keyboardLabels(inkMenu?.markup ?? "");
+    assert(inkKeys.length >= 10, `siyoh menyusida 10 ta rang tugmasi bor (${inkKeys.length})`);
+    send("Pushti");
+    await waitFor(() => mock.texts.some((entry) => entry.text.includes("Siyoh rangi: Pushti")), 15000, "pushti tanlandi");
+    assert(true, "siyoh rangi almashtirildi (Pushti)");
+
+    console.log("\n=== 8-holat: qog'oz turi (3 xil) ===");
+    send(BTN.paper);
+    const paperMenuOf = (): ReceivedText | undefined =>
+      mock.texts.filter((entry) => entry.text.startsWith("📄 Qog'oz turi (A4)")).pop();
+    await waitFor(() => Boolean(paperMenuOf()), 20000, "qog'oz menyusi");
+    const paperMenu = paperMenuOf();
+    const paperKeys = keyboardLabels(paperMenu?.markup ?? "");
+    assert(
+      ["Yo'l-yo'l", "Katak", "Toza (A4)"].every((label) => paperKeys.some((key) => key.includes(label))),
+      `qog'oz menyusida 3 xil variant (${paperKeys.join(", ")})`,
+    );
+    send("Katak");
+    await waitFor(() => mock.texts.some((entry) => entry.text.includes("Qog'oz turi: katak")), 15000, "katak tanlandi");
+    assert(true, "qog'oz turi almashtirildi (Katak)");
+
+    console.log("\n=== 9-holat: yozuv uslubi — rasm varaqasi ===");
+    const beforeSheet = mock.photos.length;
+    send(BTN.font);
+    await waitFor(() => mock.photos.length > beforeSheet, 40000, "shrift varaqasi rasmi");
+    const sheet = mock.photos[mock.photos.length - 1];
+    assert(sheet.bytes.subarray(0, 8).equals(PNG_SIGNATURE), "shriftlar ro'yxati rasm ko'rinishida keldi");
+    assert(
+      sheet.caption.includes("1-sahifa") && sheet.caption.includes("39 shrift"),
+      `rasm izohida sahifa va shrift soni bor: "${sheet.caption.split("\n")[0]}"`,
+    );
+    const sheetKeys = keyboardLabels(sheet.markup);
+    const numbered = sheetKeys.filter((label) => /^(✓ )?\d+\s/.test(label));
+    assert(numbered.length >= 8, `rasmga mos 8 ta raqamli tugma bor (${numbered.length})`);
+
+    const secondButton = sheetKeys.find((label) => /^(✓ )?2\s/.test(label));
+    assert(Boolean(secondButton), `ikkinchi qator tugmasi topildi: "${secondButton}"`);
+    // Tugma matnidan kutilgan shrift nomini olamiz (masalan "2 Pangolin" → "Pangolin").
+    const expectedFont = (secondButton ?? "").replace(/^✓\s*/, "").replace(/^\d+\s+/, "");
+    send((secondButton ?? "").replace(/^✓\s*/, ""));
+    await waitFor(() => mock.texts.some((entry) => entry.text.includes("✅ Yozuv uslubi:")), 20000, "shrift tanlandi");
+    const chosenFont = mock.texts.filter((entry) => entry.text.includes("✅ Yozuv uslubi:")).pop();
+    assert(
+      Boolean(chosenFont) && chosenFont!.text.includes(expectedFont),
+      `shrift tugmadan tanlandi: "${chosenFont?.text.split("\n")[0]}" (kutilgan: ${expectedFont})`,
+    );
+
+    console.log("\n=== 10-holat: yangi sozlamalar keyingi rasmga qo'llanishi ===");
+    const beforeStyled = mock.photos.length;
+    send("Yangi sozlamalar bilan yozilgan matn.");
+    await waitFor(() => mock.photos.length > beforeStyled, 40000, "yangi sozlamali rasm");
+    const styled = mock.photos[mock.photos.length - 1];
+    const styleLine = styled.caption.split("\n")[1] ?? "";
+    assert(styleLine.includes(expectedFont), `shrift qo'llandi: "${styleLine}"`);
+    assert(styleLine.includes("Katak"), `qog'oz turi qo'llandi: "${styleLine}"`);
+    assert(styleLine.includes("Pushti"), "siyoh rangi qo'llandi (pushti)");
+
+    console.log("\n=== 11-holat: /fonts buyrug'i va daftarlar ro'yxati ===");
+    const beforeCommand = mock.photos.length;
+    send("/fonts");
+    await waitFor(() => mock.photos.length > beforeCommand, 40000, "/fonts rasm varaqasi");
+    assert(mock.photos[mock.photos.length - 1].caption.includes("Yozuv uslubi"), "/fonts ham rasm ko'rinishida javob berdi");
+
+    send(BTN.books);
+    await waitFor(() => mock.texts.some((entry) => entry.text.includes("Daftarlaringiz")), 15000, "daftarlar ro'yxati");
+    const books = mock.texts.filter((entry) => entry.text.includes("Daftarlaringiz")).pop();
+    const bookKeys = keyboardLabels(books?.markup ?? "");
+    assert(
+      bookKeys.some((label) => /^📖 1-daftar • \d+\/24$/.test(label)),
+      `daftar tugmasida band bo'lgan betlar ko'rsatildi (${bookKeys.join(", ")})`,
+    );
+
+    console.log("\n=== 12-holat: qisqa buyruqlar (/caveat, /pink) ===");
+    const countText = (needle: string): number =>
+      mock.texts.filter((entry) => entry.text.includes(needle)).length;
+    const beforeCaveat = countText("✅ Yozuv uslubi: Caveat");
+    send("/caveat");
     await waitFor(
-      () => mock.texts.some((entry) => entry.text.includes("katak daftar")),
-      15000,
-      "/grid tasdiqi",
+      () => countText("✅ Yozuv uslubi: Caveat") > beforeCaveat,
+      20000,
+      "/caveat buyrug'i",
     );
-    assert(true, "/grid buyrug'i sozlamani o'zgartirdi");
-
-    mock.push({
-      update_id: 3,
-      message: { message_id: 3, chat: { id: TEST_CHAT_ID, type: "private" }, text: "a_1 + x^2 - 5x = 0" },
-    });
-    await waitFor(() => mock.photos.length >= 2, 30000, "ikkinchi rasm");
+    assert(true, "/caveat shriftni almashtirdi");
+    const beforePink = countText("Siyoh rangi: Pushti");
+    send("/pink");
+    await waitFor(() => countText("Siyoh rangi: Pushti") > beforePink, 20000, "/pink buyrug'i");
+    assert(true, "/pink siyoh rangini almashtirdi");
     assert(
-      mock.photos[1].caption.includes("katak daftar"),
-      `yangi sozlama qo'llandi: "${mock.photos[1].caption.split("\n")[0]}"`,
-    );
-
-    console.log("\n=== 3-holat: /file buyrug'i (PNG fayl) ===");
-    mock.push({
-      update_id: 4,
-      message: { message_id: 4, chat: { id: TEST_CHAT_ID, type: "private" }, text: "/file" },
-    });
-    await waitFor(() => mock.texts.some((entry) => entry.text.includes("PNG fayl")), 15000, "/file tasdiqi");
-    mock.push({
-      update_id: 5,
-      message: { message_id: 5, chat: { id: TEST_CHAT_ID, type: "private" }, text: "Qisqa matn: √16 = 4" },
-    });
-    await waitFor(() => mock.calls.filter((call) => call === "sendDocument").length >= 1, 30000, "fayl yuborildi");
-    assert(true, "/file rejimida natija sendDocument orqali yuborildi");
-
-    console.log("\n=== 4-holat: shriftlar kutubxonasi ===");
-
-    // Avvalgi holat `/file` rejimini yoqqan edi — rasm rejimiga qaytaramiz.
-    mock.push({
-      update_id: 5.5 as unknown as number,
-      message: { message_id: 55, chat: { id: TEST_CHAT_ID, type: "private" }, text: "/file" },
-    });
-    await waitFor(
-      () => mock.texts.some((entry) => entry.text.includes("rasm sifatida")),
-      15000,
-      "rasm rejimiga qaytish",
-    );
-    assert(true, "/file yana bosilganda rasm rejimiga qaytdi");
-
-    mock.push({
-      update_id: 6,
-      message: { message_id: 6, chat: { id: TEST_CHAT_ID, type: "private" }, text: "/fonts" },
-    });
-    await waitFor(
-      () => mock.texts.some((entry) => entry.text.includes("Marck Script") && entry.text.includes("Caveat")),
-      15000,
-      "/fonts ro'yxati",
-    );
-    const fontsMessage = mock.texts.filter((entry) => entry.text.includes("Marck Script")).pop();
-    assert(
-      Boolean(fontsMessage) && fontsMessage!.text.length < 4096,
-      `/fonts ro'yxati Telegram chegarasidan oshmadi (${fontsMessage?.text.length ?? 0} belgi)`,
-    );
-    assert(
-      (fontsMessage?.text.match(/^[a-z]+ —/gm) ?? []).length >= 20,
-      "/fonts ro'yxatida kamida 20 shrift qatori bor",
-    );
-
-    mock.push({
-      update_id: 7,
-      message: { message_id: 7, chat: { id: TEST_CHAT_ID, type: "private" }, text: "/font badscript" },
-    });
-    await waitFor(() => mock.texts.some((entry) => entry.text.includes("Bad Script")), 15000, "/font tasdiqi");
-    assert(true, "/font badscript buyrug'i shriftni almashtirdi");
-
-    const beforeScript = mock.photos.length;
-    mock.push({
-      update_id: 8,
-      message: { message_id: 8, chat: { id: TEST_CHAT_ID, type: "private" }, text: "Привет, 2026 x^2" },
-    });
-    await waitFor(() => mock.photos.length > beforeScript, 30000, "badscript bilan rasm");
-    const scriptPhoto = mock.photos[mock.photos.length - 1];
-    assert(
-      scriptPhoto.caption.includes("Bad Script"),
-      `yangi shrift keyingi rasmga qo'llandi: "${scriptPhoto.caption.split("\n")[0]}"`,
-    );
-    assert(
-      mock.calls.filter((call) => call === "sendPhoto").length >= 3,
-      "rasm rejimida sendPhoto ishlatildi",
-    );
-
-    mock.push({
-      update_id: 9,
-      message: { message_id: 9, chat: { id: TEST_CHAT_ID, type: "private" }, text: "/font shunaqashrift" },
-    });
-    await waitFor(() => mock.texts.some((entry) => entry.text.includes("/fonts")), 15000, "xato id uchun javob");
-    assert(true, "noto'g'ri shrift id'siga tushunarli javob berildi");
-
-    mock.push({
-      update_id: 10,
-      message: { message_id: 10, chat: { id: TEST_CHAT_ID, type: "private" }, text: "/font caveatbrush" },
-    });
-    await waitFor(() => mock.texts.some((entry) => entry.text.includes("Caveat Brush")), 15000, "/font caveatbrush");
-    const beforeCyrillic = mock.photos.length;
-    mock.push({
-      update_id: 11,
-      message: { message_id: 11, chat: { id: TEST_CHAT_ID, type: "private" }, text: "Привет, бу русча матн" },
-    });
-    await waitFor(() => mock.photos.length > beforeCyrillic, 30000, "kirillsiz shrift bilan rasm");
-    const cyrillicPhoto = mock.photos[mock.photos.length - 1];
-    assert(
-      cyrillicPhoto.caption.includes("kirill"),
-      `kirillsiz shriftda kirill ogohlantirishi qo'shildi: "${cyrillicPhoto.caption.split("\n").slice(-1)[0]}"`,
+      mock.texts[mock.texts.length - 1].markup.includes('"keyboard"'),
+      "qisqa buyruqdan keyin ham pastdagi menyu qoldi",
     );
 
     console.log(
@@ -329,7 +459,7 @@ async function main(): Promise<void> {
     console.error(`\nBOT TEKSHIRUVI YIQILDI: ${failures} ta shart bajarilmadi.`);
     process.exit(1);
   }
-  console.log("\nBot tekshiruvi o'tdi: matn → qo'lyozma rasm → Telegram.");
+  console.log("\nBot tekshiruvi o'tdi: menyu → daftar → varaq-tomonga yozish → Telegram.");
 }
 
 main().catch((error) => {

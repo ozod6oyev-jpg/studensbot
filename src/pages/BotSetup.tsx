@@ -143,18 +143,20 @@ function CommandTable({ rows }: { rows: { code: string; text: string }[] }) {
 /* ------------------------------------------------------------------ */
 
 const botCommands = [
-  { code: "/start", text: "Botni tanishtiradi va qisqa qo'llanmani yuboradi." },
-  { code: "/help", text: "Buyruqlar va matematika sintaksisi eslatmasi." },
-  { code: "/settings", text: "Inline tugmalar bilan daftar turi, siyoh rangi va uslubni tanlash." },
+  { code: "/start", text: "Salomlashadi va pastdagi doimiy menyuni chiqaradi: ✍️ Matn kiritish va ⚙️ Sozlamalar." },
+  { code: "/help", text: "Buyruqlar va matematika sintaksisi eslatmasi (menyu ham qoladi)." },
+  { code: "/settings", text: "Sozlamalar menyusini ochadi: siyoh rangi, qog'oz turi, yozuv uslubi, yozuv sozlamalari, daftarlar." },
   { code: "/lined", text: "Yo'l-yo'l (chiziqli) daftar — adabiyot, insho, diktant uchun." },
   { code: "/grid", text: "Katak daftar — matematika, algebra, geometriya uchun." },
-  { code: "/plain", text: "Toza (chiziqsiz) oq varaq." },
+  { code: "/plain", text: "Toza (chiziqsiz) oq varaq — A4 o'lchamda." },
   { code: "/blue /black /graphite", text: "Siyoh rangini tanlash: ko'k, qora yoki qalam." },
-  { code: "/green /red /purple", text: "Qo'shimcha siyoh ranglari." },
+  { code: "/green /red /purple", text: "Yashil, qizil va siyohrang siyohlar." },
+  { code: "/orange /pink", text: "To'q sariq va pushti siyohlar." },
+  { code: "/teal /brown", text: "Havorang va jigarrang — jami 10 ta rang." },
   { code: "/caveat", text: "Erkin qo'lyozma uslubi (Caveat) — tez yozilgan daftar." },
   { code: "/marck", text: "Chiroyli qo'lyozma uslubi (Marck Script) — ozoda yozuv." },
   { code: "/font <id>", text: "Yozuv shriftini almashtiradi — 39 shriftdan birini tanlang, masalan /font badscript." },
-  { code: "/fonts", text: "Kutubxonadagi barcha shriftlar ro'yxati: id, kategoriya va kirillcha ishlashi." },
+  { code: "/fonts", text: "Shriftlar ro'yxatini ko'rsatadi — har bir nom o'z shriftida chizilgan rasm ko'rinishida (Telegram shriftlarni ko'rsata olmaydi)." },
   { code: "/size 34", text: "Yozuv o'lchamini o'zgartirish (26–52 oralig'ida)." },
   { code: "/file", text: "Natijani rasm sifatida emas, PNG fayl sifatida yuborish rejimini yoqadi/o'chiradi." },
   { code: "/id", text: "Chat ID'ni ko'rsatadi — botni alohida chat yoki guruhga ulashda yordam beradi." },
@@ -188,7 +190,7 @@ const envVars = [
   { code: "TELEGRAM_BOT_TOKEN", text: "Majburiy. @BotFather bergan token." },
   { code: "BOT_SECRET", text: "Ixtiyoriy. Webhook uchun maxfiy kalit (faqat webhook rejimida)." },
   { code: "PORT", text: "Ixtiyoriy. Webhook server porti, standart 8080." },
-  { code: "BOT_DATA_DIR", text: "Ixtiyoriy. Chat sozlamalari saqlanadigan papka (standart ./bot/data)." },
+  { code: "BOT_DATA_DIR", text: "Ixtiyoriy. Sozlamalar va daftarlar saqlanadigan papka: settings.json, notebooks.json (standart ./bot/data)." },
   {
     code: "TELEGRAM_API_BASE",
     text: "Ixtiyoriy. O'z Bot API serveringiz yoki test uchun API manzili (standart https://api.telegram.org).",
@@ -207,6 +209,14 @@ const troubleshooting = [
   { code: "text tushmayapti", text: "Faqat matn va `$...$` ichidagi formulalar qayta ishlanadi; ovozli xabar va rasmlar hozircha qo'llanmaydi." },
   { code: "Juda uzun javob", text: "Matn bir necha varaqqa bo'linadi va har bir varaq alohida rasm qilib yuboriladi." },
   { code: "Belgi topilmadi", text: "Agar belgi shriftda bo'lmasa, bot javobiga ogohlantirish qo'shiladi; belgini boshqa usulda yozib ko'ring." },
+  {
+    code: "daftar yo'q",
+    text: "`✍️ Matn kiritish` daftar yo'qligini aytsa, `➕ Yangi daftar` bilan 12/36/48/96 varaqdan birini tanlab daftar yarating.",
+  },
+  {
+    code: "Matn yozilmayapti",
+    text: "Matn faqat ochiq daftarga yoziladi: `📚 Daftarlar` bo'limidan daftarni tanlang (yoki `✍️ Matn kiritish`), keyin matn yuboring.",
+  },
 ];
 
 /* ------------------------------------------------------------------ */
@@ -226,9 +236,9 @@ export default function BotSetup() {
             Telegram botni ulash
           </h1>
           <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-pencil/85">
-            Bot Studio bilan bir xil qo'lyozma dvigatelidan foydalanadi: siz matn yuborasiz, bot uni
-            chiziqli yoki katak daftarga qo'lda yozilgan ko'rinishda rasm qilib qaytaradi. Quyidagi
-            qadamlarni ketma-ket bajaring.
+            Bot Studio bilan bir xil qo'lyozma dvigatelidan foydalanadi. U pastdagi menyu bilan
+            boshqariladi: avval daftar yaratasiz (12/36/48/96 varaq), keyin matn yuborasiz — yozuv
+            varaqma-varaq, xuddi haqiqiy daftardek chiqadi. Quyidagi qadamlarni ketma-ket bajaring.
           </p>
         </div>
 
@@ -335,7 +345,7 @@ export default function BotSetup() {
             </Notice>
           </StepCard>
 
-          <StepCard index={4} title="Sozlash: daftar turi, rang, uslub">
+          <StepCard index={4} title="Sozlash: pastdagi menyu">
             <p>
               Botdagi natija Studio'dagi bilan bir xil dvigatel orqali chiziladi — ya'ni{" "}
               <Link to="/studio" className="font-semibold text-ink underline decoration-marker/60 decoration-2 underline-offset-2">
@@ -344,11 +354,32 @@ export default function BotSetup() {
               ko'rganingiz aynan botda ham chiqadi.
             </p>
             <p>
-              Botga <code className="font-mono text-[13px]">/settings</code> yuboring — daftar turi va siyoh
-              rangini inline tugmalar bilan almashtirasiz. Har bir rasm ostida ham tezkor tugmalar chiqadi,
-              shuning uchun buyruq yozib o'tirmasangiz ham bo'ladi.
+              Tugmalar endi chat ichida emas, matn yoziladigan qatorning tagida turadi:{" "}
+              <code className="font-mono text-[13px]">⚙️ Sozlamalar</code> ni bosing va har bir bo'limni
+              alohida ochib sozlang.
             </p>
-            <Badge tone="sage">Maslahat: adabiyot uchun /lined + /marck, matematika uchun /grid + /caveat</Badge>
+            <CommandTable
+              rows={[
+                {
+                  code: "🖋 Siyoh rangi",
+                  text: "10 ta rang: ko'k, qora, qalam, yashil, qizil, siyohrang, to'q sariq, pushti, havorang, jigarrang. Joriysi ✓ bilan belgilanadi.",
+                },
+                {
+                  code: "📄 Qog'oz turi",
+                  text: "Yo'l-yo'l (chiziqli), Katak (5 mm) va Toza — uchtasi ham A4 o'lchamda.",
+                },
+                {
+                  code: "✍️ Yozuv uslubi",
+                  text: "39 shriftdan birini tanlash; ro'yxat sahifalab, har bir nom o'z shriftida chizilgan rasm ko'rinishida chiqadi.",
+                },
+                {
+                  code: "📐 Yozuv sozlamalari",
+                  text: "O'lcham, qo'l tebranishi, qator oralig'i, matematika rejimi va natijani rasm yoki PNG fayl qilib yuborish.",
+                },
+                { code: "📚 Daftarlar", text: "Daftarlar ro'yxati va yangi daftar yaratish." },
+              ]}
+            />
+            <Badge tone="sage">Maslahat: adabiyot uchun Yo'l-yo'l + Marck Script, matematika uchun Katak + Caveat</Badge>
 
             <p className="pt-2 font-semibold text-ink">Yozuv shriftini tanlash (39 xil qo'lyozma)</p>
             <p>
@@ -375,7 +406,36 @@ export default function BotSetup() {
             </p>
           </StepCard>
 
-          <StepCard index={5} title="Buyruqlar va matematika sintaksisi">
+          <StepCard index={5} title="Daftar yaratish va matn yozish">
+            <p>
+              Yozishdan oldin daftar kerak: <code className="font-mono text-[13px]">➕ Yangi daftar</code> ni
+              bosing va varaq sonini tanlang — <strong>12</strong>, <strong>36</strong>, <strong>48</strong> yoki{" "}
+              <strong>96 varaq</strong>. Har varaqning ikki tomoni bo'ladi, ya'ni jami 24/72/96/192 bet.
+            </p>
+            <CommandTable
+              rows={[
+                {
+                  code: "✍️ Matn kiritish",
+                  text: "Daftarlar ro'yxatini chiqaradi va tanlangan daftarni ochadi. Daftar hali bo'lmasa, avval yangi daftar yaratish kerakligini aytadi.",
+                },
+                {
+                  code: "📖 1-daftar • 5/24",
+                  text: "Daftar tugmasi: nomi va nechta bet band qilinganini ko'rsatadi.",
+                },
+                {
+                  code: "yuborilgan matn",
+                  text: "Tanlangan daftarga varaqma-varaq yoziladi va har bir tomon alohida rasm bo'lib qaytadi.",
+                },
+              ]}
+            />
+            <Notice tone="info" title="Xuddi haqiqiy daftardek">
+              Varaqning <strong>old tomonida</strong> qizil chegara chapda, <strong>orqa tomonida</strong> esa
+              o'ngda bo'ladi — yozuv varaqdan varaqqa shu tartibda davom etadi. Daftar varaqlari tugaganda bot
+              yangi daftar yaratishni aytadi.
+            </Notice>
+          </StepCard>
+
+          <StepCard index={6} title="Buyruqlar va matematika sintaksisi">
             <p className="font-semibold text-ink">Bot buyruqlari</p>
             <CommandTable rows={botCommands} />
             <p className="pt-4 font-semibold text-ink">Matematika yozuvi</p>
@@ -386,7 +446,7 @@ export default function BotSetup() {
             </p>
           </StepCard>
 
-          <StepCard index={6} title="Muammolar va yechimlar">
+          <StepCard index={7} title="Muammolar va yechimlar">
             <CommandTable rows={troubleshooting} />
             <p className="pt-3">
               Yordam kerak bo'lsa, avval{" "}

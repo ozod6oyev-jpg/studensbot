@@ -96,8 +96,26 @@ sudo -u daftar /usr/local/bin/bun run /opt/daftar-bot/bot/index.ts info
 
 `info` buyrug'i bot nomini, username'ini va webhook holatini ko'rsatadi.
 
-Endi Telegramda botingizga matn yuboring — bir necha soniyada daftar varaqasi
-rasm bo'lib qaytadi. 🎉
+## 6. Botdan foydalanish (qisqacha)
+
+Bot pastdagi **doimiy menyu** bilan ishlaydi (tugmalar chat ichida emas):
+
+```text
+✍️ Matn kiritish   ⚙️ Sozlamalar
+```
+
+- `➕ Yangi daftar` → varaq soni tanlanadi: 12 / 36 / 48 / 96 (har varaqning ikki tomoni bor —
+  jami 24/72/96/192 bet);
+- `✍️ Matn kiritish` → daftarlar ro'yxati chiqadi; daftar hali bo'lmasa, avval yangi daftar
+  yaratish kerakligi aytiladi;
+- yuborilgan matn ochiq daftarga varaqma-varaq yoziladi va har bir tomon rasm bo'lib qaytadi:
+  old tomonida chegara chapda, orqa tomonida o'ngda (xuddi haqiqiy daftar kabi);
+- `⚙️ Sozlamalar` ichida alohida ochiladi: `🖋 Siyoh rangi` (10 ta rang), `📄 Qog'oz turi`
+  (Yo'l-yo'l / Katak / Toza (A4)), `✍️ Yozuv uslubi` (39 shrift — ro'yxat rasm ko'rinishida,
+  chunki Telegram shriftlarni ko'rsata olmaydi), `📐 Yozuv sozlamalari`, `📚 Daftarlar`.
+
+Ma'lumotlar `BOT_DATA_DIR` papkasida (xizmatda `/var/lib/daftar-bot`) saqlanadi:
+`settings.json` — chat sozlamalari, `notebooks.json` — daftarlar. 🎉
 
 ---
 
@@ -118,7 +136,8 @@ sudo bash deploy/deploy.sh           # git manzili bilan chaqirilgan bo'lsa: shu
 ```
 
 `deploy.sh` loyihani yangilab, bog'liqliklarni o'rnatadi va xizmatni qayta
-ishga tushiradi. `.env` va `/var/lib/daftar-bot` (chat sozlamalari) saqlanib qoladi.
+ishga tushiradi. `.env` va `/var/lib/daftar-bot` (chat sozlamalari va daftarlar:
+`settings.json`, `notebooks.json`) saqlanib qoladi.
 
 ## Webhook rejimiga o'tish (ixtiyoriy)
 
@@ -229,8 +248,8 @@ qatorini domeningizga o'zgartiring.
 | `409 Conflict` | Polling va webhook birga ishlayapti — bittasini to'xtating (`delete-webhook`) |
 | Xizmat ishga tushmayapti | `journalctl -u daftar-bot -n 50` — ko'pincha `.env` da token yo'q yoki Bun yo'li xato |
 | `can't cd to /opt/daftar-bot` | `chown -R daftar:daftar /opt/daftar-bot` |
-| Sozlamalar saqlanmayapti | `/var/lib/daftar-bot` papkasi `daftar` foydalanuvchisiga tegishli bo'lishi kerak |
-| Rasm chiqmayapti | Matn yuborilganini tekshiring (bot faqat matn bilan ishlaydi) va loglarni ko'ring |
+| Sozlamalar yoki daftarlar saqlanmayapti | `/var/lib/daftar-bot` papkasi `daftar` foydalanuvchisiga tegishli bo'lishi kerak (`settings.json`, `notebooks.json`) |
+| Rasm chiqmayapti | Matn yuborilganini va ochiq daftar borligini tekshiring: matn faqat tanlangan daftarga yoziladi, daftar bo'lmasa bot yangisini yaratishni aytadi |
 | Webhook ishlamayapti | Domen HTTPS bo'lishi va `/telegram/webhook` yo'li proxy qilingan bo'lishi shart |
 
 ## Xavfsizlik

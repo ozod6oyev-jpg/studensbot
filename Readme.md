@@ -8,12 +8,13 @@ formulalari uchun ham ishlaydi.
 ## Nima qiladi
 
 - 📝 Matnni qatorlarga bo'lib, chegaraga yetganda so'zni keyingi qatorga ko'chiradi.
-- 📄 Varaq to'lganda yangi varaq ochadi — har bir varaq alohida rasm bo'ladi.
-- 📐 **Yo'l-yo'l** (chiziqli, chegarasi qizil chiziqli) va **katak** (5 mm) daftar varaqalari, shuningdek toza oq varaq.
+- 📄 Varaq to'lganda keyingi varaqani ochadi; daftardagidek **old tomonida chegara chapda, orqa tomonida o'ngda** bo'ladi va yozuv varaqdan varaqqa uzluksiz davom etadi.
+- 📐 **Yo'l-yo'l** (chiziqli, chegarasi qizil chiziqli), **katak** (5 mm) va **toza** oq varaq — hammasi A4 o'lchamda.
 - 🖋 **39 shriftdan iborat qo'lyozma kutubxonasi**, 6 kategoriyada: erkin qo'lyozma, ozoda yozuv, bosma (pechat) uslub, kitobiy kursiv, mo'yqalam-bo'r va bolalar yozuvi. Shulardan 13 tasi kirillcha matnni ham biladi.
-- 🎨 Olti xil siyoh rangi: ko'k, qora, qalam, yashil, qizil, siyohrang.
+- 🎨 **O'nta siyoh rangi**: ko'k, qora, qalam, yashil, qizil, siyohrang, to'q sariq, pushti, havorang, jigarrang.
+- 📚 **Daftar bazasi**: foydalanuvchi 12, 36, 48 yoki 96 varaqli daftar yaratadi (har varaqning ikki tomoni bor) va yozgan matni shu daftarga varaqma-varaq joylashib boradi.
 - ➗ Matematika: daraja (`x^2`), indeks (`a_1`), kasr (`\frac{a}{b}`), ildiz (`\sqrt{x}`), √ ∫ ∑ ≤ ≥ ≠ ∞ π ∠ ⊥ ∥ va yunon harflari.
-- 🤖 Telegram bot: `/settings` bilan inline sozlamalar, har bir rasmdan keyin tezkor tugmalar.
+- 🤖 Telegram bot: pastdagi **doimiy menyu** (`✍️ Matn kiritish`, `⚙️ Sozlamalar`) — tugmalar chat ichida emas, har bir sozlama alohida ochiladi.
 - 🌐 Studio: brauzerda jonli ko'rinish, PNG yuklab olish, hech qanday akkaunt kerak emas.
 
 ## Tez boshlash
@@ -55,6 +56,9 @@ bun bot/index.ts delete-webhook    # pollingga qaytish uchun
 │   ├── lib/handwriting/        # qo'lyozma render dvigateli (brauzer + Node uchun bir xil)
 │   │   ├── types.ts            # umumiy tiplar va DEFAULT_STYLE
 │   │   ├── options.ts          # UI uchun tanlovlar (qog'oz, siyoh, shrift, format)
+│   │   ├── names.ts            # shrift nomlarini ko'rsatish (bot, galereya, varaqa)
+│   │   ├── font-sheet.ts       # shriftlar varaqasi: nomlar o'z shriftida chizilgan rasm (Telegram uchun)
+│   │   ├── fit.ts              # matnni bitta varaq tomoniga sig'dirish (daftar uchun)
 │   │   ├── browser.ts          # brauzerda shrift yuklab, render qilish
 │   │   ├── render.ts           # asosiy kirish nuqtasi: renderNotebook()
 │   │   ├── layout.ts           # matnni qatorlarga bo'lish va joylash
@@ -70,8 +74,9 @@ bun bot/index.ts delete-webhook    # pollingga qaytish uchun
 │   ├── components/             # site-chrome, notebook-preview, font-gallery, ui/* primitivlari
 │   ├── hooks/                  # use-notebook-render — debounce bilan render
 │   └── assets/fonts/           # 39 qo'lyozma shrifti + licenses/ (OFL matnlari)
-├── bot/index.ts                # Telegram bot: polling, webhook, sozlamalar, buyruqlar
-│   └── data/                   # ishlash paytida yaratiladi: chat sozlamalari (git'ga tushmaydi)
+├── bot/index.ts                # Telegram bot: polling, webhook, menyu va buyruqlar
+│   ├── db.ts                   # daftar bazasi (JSON ombor)
+│   └── data/                   # ishlash paytida yaratiladi: settings.json + notebooks.json (git'ga tushmaydi)
 ├── scripts/fetch-fonts.ts      # shriftlar kutubxonasini yangilash (google/fonts dan)
 ├── scripts/check-render.ts     # dvigatel tekshiruvi: PNG namunalar + matematika geometriyasi
 ├── scripts/check-bot.ts        # bot tekshiruvi: soxta Telegram server bilan to'liq oqim
@@ -97,16 +102,43 @@ bun bot/index.ts delete-webhook    # pollingga qaytish uchun
 Matematika rejimini o'chirish uchun Studio'da "Matematika" tugmasini o'chiring — u holda belgilar
 o'zgartirilmasdan, oddiy matn sifatida yoziladi.
 
-## Bot buyruqlari
+## Bot interfeysi
+
+Bot pastdagi **doimiy menyu** bilan boshqariladi — tugmalar chat ichida emas, matn yoziladigan
+qatorning tagida turadi:
+
+| Bo'lim | Tugmalar |
+| --- | --- |
+| Asosiy menyu (`/start`) | `✍️ Matn kiritish`, `⚙️ Sozlamalar` |
+| `⚙️ Sozlamalar` | `🖋 Siyoh rangi`, `📄 Qog'oz turi`, `✍️ Yozuv uslubi`, `📐 Yozuv sozlamalari`, `📚 Daftarlar`, `⬅️ Asosiy menyu` |
+| `🖋 Siyoh rangi` | 10 rang (joriysi ✓ bilan): Ko'k, Qora, Qalam, Yashil, Qizil, Siyohrang, To'q sariq, Pushti, Havorang, Jigarrang |
+| `📄 Qog'oz turi` | `Yo'l-yo'l`, `Katak`, `Toza (A4)` |
+| `✍️ Yozuv uslubi` | sahifalab: 8 shriftdan iborat **rasm varaqasi** va `1 Caveat`, `2 Marck Script`, … tugmalari, `⬅️ Oldingi`, `Keyingi ➡️` |
+| `📐 Yozuv sozlamalari` | `🔠 O'lcham`, `〰️ Qo'l tebranishi`, `📏 Qator oralig'i`, `🔢 Matematika`, `🖼 Yuborish turi` |
+| `📚 Daftarlar` | daftarlar ro'yxati (`📖 1-daftar • 5/24`), `➕ Yangi daftar` |
+| `➕ Yangi daftar` | `12 varaq`, `36 varaq`, `48 varaq`, `96 varaq` |
+
+**Daftar bilan ishlash:** `➕ Yangi daftar` orqali varaq soni (12/36/48/96) tanlanadi — har varaqning
+ikki tomoni bo'ladi, ya'ni jami 24/72/96/192 bet. `✍️ Matn kiritish` daftarlar ro'yxatini chiqaradi;
+hali daftar bo'lmasa, avval yangi daftar yaratish kerakligi aytiladi. Tanlangan daftarga yuborilgan
+matn varaqma-varaq yoziladi va har bir tomon alohida rasm bo'lib qaytadi — old tomonida chegara
+chapda, orqa tomonida o'ngda (xuddi haqiqiy daftar kabi).
+
+**Shriftlar rasm ko'rinishida:** Telegram o'z shriftlarini ko'rsata olmaydi, shuning uchun
+`✍️ Yozuv uslubi` bo'limida ro'yxat har bir nom o'z shriftida chizilgan **rasm** ko'rinishida
+yuboriladi va tagidagi tugmalar (`1 Caveat`, `2 Marck Script`, …) shu varaqqa mos keladi.
+
+Quyidagi buyruqlar ham ishlashda davom etadi (tez tanlash uchun):
 
 | Buyruq | Nima qiladi |
 | --- | --- |
-| `/start`, `/help` | tanishtiruv va qo'llanma |
-| `/settings` | inline tugmalar bilan sozlash |
+| `/start`, `/help` | salomlashuv, menyu va qo'llanma |
+| `/settings` | sozlamalar menyusini ochadi (pastdagi tugmalar) |
 | `/lined`, `/grid`, `/plain` | yo'l-yo'l, katak, toza varaq |
 | `/blue`, `/black`, `/graphite` | siyoh rangi |
 | `/green`, `/red`, `/purple` | qo'shimcha ranglar |
-| `/fonts` | kutubxonadagi barcha 39 shrift ro'yxatini ko'rsatadi (id, kategoriya, kirillcha) |
+| `/orange`, `/pink`, `/teal`, `/brown` | qolgan to'rtta rang |
+| `/fonts` | shriftlar ro'yxatini ko'rsatadi (nomlar o'z shriftida chizilgan rasm ko'rinishida, id va kategoriya bilan) |
 | `/font <id>` | yozuv shriftini almashtiradi, masalan `/font badscript` |
 | `/caveat`, `/marck` | tez-tez ishlatiladigan ikki shrift uchun qisqa buyruqlar |
 | `/size 34` | yozuv o'lchami (26–52) |
@@ -120,7 +152,7 @@ o'zgartirilmasdan, oddiy matn sifatida yoziladi.
 | `TELEGRAM_BOT_TOKEN` | ✅ | @BotFather bergan token |
 | `BOT_SECRET` | ➖ | webhook uchun maxfiy kalit (ixtiyoriy) |
 | `PORT` | ➖ | webhook server porti (standart `8080`) |
-| `BOT_DATA_DIR` | ➖ | chat sozlamalari saqlanadigan papka (standart `./bot/data`) |
+| `BOT_DATA_DIR` | ➖ | sozlamalar (`settings.json`) va daftarlar (`notebooks.json`) saqlanadigan papka (standart `./bot/data`) |
 | `TELEGRAM_API_BASE` | ➖ | o'z Bot API serveringiz yoki test uchun API manzili (standart `https://api.telegram.org`) |
 
 Freebuff'da kalitlarni **Settings → Environment (Keys)** bo'limida qo'shing; mahalliy ishda `.env`
@@ -165,6 +197,8 @@ Qo'lda ishga tushirish variantlari:
 | Uzun matn | matn bir necha varaqqa bo'linadi va har biri alohida rasm bo'ladi |
 | Belgida ogohlantirish | belgi shriftda yo'q — javobdagi ogohlantirishni o'qing |
 | Kirill harflar boshqacha ko'rinadi | tanlangan shriftda kirill yo'q — `/fonts` bilan kirillcha biladigan shriftni tanlang |
+| Matn rasm bo'lib qaytmayapti | avval `➕ Yangi daftar` bilan daftar yaratib, `✍️ Matn kiritish` orqali uni tanlang — daftarsiz matn yozilmaydi |
+| Daftar to'ldi | varaqlari tugaganda bot yangi daftar yaratishni aytadi; `📚 Daftarlar` bo'limidan yangisini oching |
 | Shrift kutubxonasi yangilanmayapti | `bun scripts/fetch-fonts.ts` ni ishga tushiring; xato bo'lsa internetni tekshiring |
 
 ## Tekshiruvlar
@@ -202,8 +236,9 @@ shriftda (Caveat) chiziladi va bot bu haqda bir marta ogohlantiradi.
 
 **Qanday tanlanadi:**
 
-- Telegram botda: `/fonts` — to'liq ro'yxat, `/font <id>` — almashtirish (`/font badscript`),
-  `/settings` esa tugmalar bilan; har bir rasmdan keyin tezkor tugmalar ham chiqadi.
+- Telegram botda: `✍️ Yozuv uslubi` menyusi — ro'yxat har bir nom o'z shriftida chizilgan rasm
+  ko'rinishida chiqadi va tugmalar bilan tanlanadi; `/fonts` ham shu varaqani ko'rsatadi,
+  `/font <id>` esa to'g'ridan-to'g'ri almashtiradi (`/font badscript`).
 - Studioda: shrift galereyasida kategoriya bo'yicha ko'rib, jonli namunasini ko'rasiz.
 
 **O'lchamlar tenglashtirilgan:** har bir shriftning x-balandligi o'lchanadi va shunga mos koeffitsient
@@ -228,5 +263,6 @@ repozitoriyasidan olingan. Litsenziya matnlari `src/assets/fonts/licenses/` papk
 ## Akkaunt kerakmi?
 
 Yo'q. Studio butunlay brauzerda ishlaydi: matn hech qanday serverga yuborilmaydi, rasm shu qurilmaning
-o'zida chiziladi. Bot esa siz o'zingiz ishga tushiradigan jarayon — shuning uchun ro'yxatdan o'tish,
-profil va ma'lumotlar bazasi yo'q.
+o'zida chiziladi. Bot ham siz o'zingiz ishga tushiradigan jarayon, ma'lumotlari esa (sozlamalar va
+daftarlar) faqat `BOT_DATA_DIR` papkasidagi JSON fayllarda saqlanadi — tashqi xizmat, akkaunt yoki
+bulut bazasi ishlatilmaydi.

@@ -7,8 +7,27 @@
 /** Qog'oz turi: yo'l-yo'l (chiziqli), katak daftar yoki toza varaq. */
 export type PaperType = "lined" | "grid" | "plain";
 
-/** Siyoh rangi. */
-export type InkColor = "blue" | "black" | "graphite" | "green" | "red" | "purple";
+/**
+ * Siyoh rangi — 10 xil (maksimum). Ro'yxat `options.ts` dagi `INK_OPTIONS`
+ * bilan bir xil bo'lishi kerak: id → hex mosligi shu yerda ham ishlatiladi.
+ */
+export type InkColor =
+  | "blue"
+  | "black"
+  | "graphite"
+  | "green"
+  | "red"
+  | "purple"
+  | "orange"
+  | "pink"
+  | "teal"
+  | "brown";
+
+/**
+ * Varaqning tomoni. Haqiqiy daftarda har varaqning ikki tomoni bor:
+ * old tomon ("recto") — qizil chegara chapda, orqa tomon ("verso") — o'ngda.
+ */
+export type PageSide = "recto" | "verso";
 
 /**
  * Qo'lyozma shrifti identifikatori. Kutubxonadagi har bir shrift o'z id'siga
@@ -43,6 +62,12 @@ export interface NotebookStyle {
   /** Matematika rejimi: ^, _, \frac{}{}, \sqrt{} kabi yozuvlar tahlil qilinadi. */
   mathMode: boolean;
   pageFormat: PageFormat;
+  /**
+   * Birinchi varaq qaysi tomondan boshlanadi: "recto" (chegara chapda) yoki
+   * "verso" (chegara o'ngda). Keyingi varaqlar almashib boradi — haqiqiy
+   * daftardagidek.
+   */
+  startSide: PageSide;
 }
 
 export const DEFAULT_STYLE: NotebookStyle = {
@@ -57,6 +82,7 @@ export const DEFAULT_STYLE: NotebookStyle = {
   seed: 7,
   mathMode: true,
   pageFormat: "a4",
+  startSide: "recto",
 };
 
 export interface RenderPage {
@@ -69,6 +95,8 @@ export interface RenderPage {
   png: Uint8Array;
   /** Xom RGBA piksellar (asosan test/tekshirish uchun). */
   rgba: Uint8ClampedArray;
+  /** Varaqning tomoni: chegara chapda (recto) yoki o'ngda (verso). */
+  side: PageSide;
 }
 
 export interface RenderResult {
