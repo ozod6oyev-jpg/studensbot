@@ -1,0 +1,35 @@
+[Unit]
+# Daftar Bot — Telegram bot jarayoni.
+# Bu fayl loyihadagi `deploy/` papkasida saqlanadi va deploy.sh uni
+# /etc/systemd/system/ ga nusxalaydi.
+Description=Daftar Bot — matnni qo'lyozma daftar sahifasiga aylantiruvchi Telegram bot
+Documentation=file:/opt/daftar-bot/Readme.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Bot qaysi foydalanuvchi nomidan ishlaydi (deploy.sh uni yaratadi).
+User=daftar
+Group=daftar
+# Loyiha joylashgan papka.
+WorkingDirectory=/opt/daftar-bot
+# Maxfiy kalitlar (TELEGRAM_BOT_TOKEN va boshqalar). Fayl bo'lmasa ham xizmat ishga tushadi.
+EnvironmentFile=-/opt/daftar-bot/.env
+# Chat sozlamalari (settings.json) shu papkada saqlanadi.
+Environment=BOT_DATA_DIR=/var/lib/daftar-bot
+# systemd toza muhitda ishga tushiradi, shuning uchun bun yo'lini o'zimiz beramiz.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# `poll` — long polling rejimi (domen va webhook shart emas).
+# Webhookga o'tish uchun: systemctl edit daftar-bot  va ExecStart'ni
+#   /usr/local/bin/bun run /opt/daftar-bot/bot/index.ts webhook https://domen.example
+# qilib yozing (qo'shimcha sabablari deploy/README.md da).
+ExecStart=/usr/local/bin/bun run /opt/daftar-bot/bot/index.ts poll
+Restart=always
+RestartSec=5
+# Xavfsizlik uchun qo'shimcha cheklovlar.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

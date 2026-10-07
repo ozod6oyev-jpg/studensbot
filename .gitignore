@@ -1,0 +1,20 @@
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.tsbuildinfo
+
+# Maxfiy kalitlar
+.env
+.env.local
+.env.*.local
+
+# Botning ishlash paytida yaratadigan fayllari (chat sozlamalari, loglar)
+bot/data/
+
+# Muhit va muharrir fayllari
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.log
