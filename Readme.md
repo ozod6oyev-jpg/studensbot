@@ -12,7 +12,7 @@ formulalari uchun ham ishlaydi.
 - 📐 **Yo'l-yo'l** (chiziqli, chegarasi qizil chiziqli), **katak** (5 mm) va **toza** oq varaq — hammasi A4 o'lchamda.
 - 🖋 **39 shriftdan iborat qo'lyozma kutubxonasi**, 6 kategoriyada: erkin qo'lyozma, ozoda yozuv, bosma (pechat) uslub, kitobiy kursiv, mo'yqalam-bo'r va bolalar yozuvi. Shulardan 13 tasi kirillcha matnni ham biladi.
 - 🎨 **O'nta siyoh rangi**: ko'k, qora, qalam, yashil, qizil, siyohrang, to'q sariq, pushti, havorang, jigarrang.
-- 📚 **Daftar bazasi**: foydalanuvchi 12, 36, 48 yoki 96 varaqli daftar yaratadi (har varaqning ikki tomoni bor) va yozgan matni shu daftarga varaqma-varaq joylashib boradi.
+- 📚 **Daftar bazasi**: foydalanuvchi 12, 36, 48 yoki 96 varaqli daftar yaratadi (har varaqning ikki tomoni bor) va yozgan matni shu daftarga varaqma-varaq joylashib boradi. Daftarga **nom berish** va **nomini o'zgartirish** mumkin, u **kitobdek PDF** qilib yuklab olinadi.
 - ➗ Matematika: daraja (`x^2`), indeks (`a_1`), kasr (`\frac{a}{b}`), ildiz (`\sqrt{x}`), √ ∫ ∑ ≤ ≥ ≠ ∞ π ∠ ⊥ ∥ va yunon harflari.
 - 🤖 Telegram bot: pastdagi **doimiy menyu** (`✍️ Matn kiritish`, `⚙️ Sozlamalar`) — tugmalar chat ichida emas, har bir sozlama alohida ochiladi.
 - 🌐 Studio: brauzerda jonli ko'rinish, PNG yuklab olish, hech qanday akkaunt kerak emas.
@@ -116,13 +116,34 @@ qatorning tagida turadi:
 | `✍️ Yozuv uslubi` | sahifalab: 8 shriftdan iborat **rasm varaqasi** va `1 Caveat`, `2 Marck Script`, … tugmalari, `⬅️ Oldingi`, `Keyingi ➡️` |
 | `📐 Yozuv sozlamalari` | `🔠 O'lcham`, `〰️ Qo'l tebranishi`, `📏 Qator oralig'i`, `🔢 Matematika`, `🖼 Yuborish turi` |
 | `📚 Daftarlar` | daftarlar ro'yxati (`📖 1-daftar • 5/24`), `➕ Yangi daftar` |
-| `➕ Yangi daftar` | `12 varaq`, `36 varaq`, `48 varaq`, `96 varaq` |
+| daftar kartasi (ro'yxatdagi `📖 …` tugmasi) | `✍️ Shu daftarga yozish`, `⬇️ PDF yuklab olish`, `✏️ Nomini o'zgartirish`, `⬅️ Daftarlar` |
+| `➕ Yangi daftar` | `12 varaq`, `36 varaq`, `48 varaq`, `96 varaq`, so'ng nom so'rash: `⏭ Nomsiz qoldirish` |
 
 **Daftar bilan ishlash:** `➕ Yangi daftar` orqali varaq soni (12/36/48/96) tanlanadi — har varaqning
 ikki tomoni bo'ladi, ya'ni jami 24/72/96/192 bet. `✍️ Matn kiritish` daftarlar ro'yxatini chiqaradi;
 hali daftar bo'lmasa, avval yangi daftar yaratish kerakligi aytiladi. Tanlangan daftarga yuborilgan
 matn varaqma-varaq yoziladi va har bir tomon alohida rasm bo'lib qaytadi — old tomonida chegara
 chapda, orqa tomonida o'ngda (xuddi haqiqiy daftar kabi).
+
+**Daftarga nom berish:** varaq soni tanlangach bot nom so'raydi — matn yuborsangiz, daftar shu nom
+bilan yaratiladi. `⏭ Nomsiz qoldirish` bosilsa, nom avtomatik qo'yiladi (`1-daftar`, keyingisi
+`2-daftar`) va daftar ochiladi.
+
+**Daftar kartasi:** `📚 Daftarlar` ro'yxatidagi istalgan `📖 …` tugmasi bosilganda daftar kartasi
+chiqadi:
+
+| Karta tugmasi | Nima qiladi |
+| --- | --- |
+| `✍️ Shu daftarga yozish` | daftar ochiq qilib belgilanadi — keyingi matnlar shunga yoziladi |
+| `⬇️ PDF yuklab olish` | daftarning barcha yozilgan betlarini kitobdek PDF hujjat qilib beradi |
+| `✏️ Nomini o'zgartirish` | yangi nomni matn ko'rinishida so'raydi — keyingi xabar daftar nomi bo'ladi |
+| `⬅️ Daftarlar` | ro'yxatga qaytaradi |
+
+**Daftarni kitobdek yuklab olish:** `⬇️ PDF yuklab olish` bosilganda daftardagi barcha yozilgan
+betlar ketma-ket (old tomon, orqa tomon, keyingi varaq, …) **A4 sahifali ko'p betli PDF** qilib
+yuboriladi (sahifalar joriy sozlamalar — siyoh, qog'oz, shrift — bilan chiziladi) — fayl nomi `<daftar nomi>.pdf`; xuddi asl daftarni varaqlayotgandek o'qib yoki chop etib
+bo'ladi. Varaq soni juda ko'p bo'lsa, PDF bir necha qismga bo'linadi (`-1-qism`, `-2-qism`, …). U
+`🖼 Yuborish turi` sozlamasidan qat'i nazar **hujjat** sifatida yuboriladi.
 
 **Shriftlar rasm ko'rinishida:** Telegram o'z shriftlarini ko'rsata olmaydi, shuning uchun
 `✍️ Yozuv uslubi` bo'limida ro'yxat har bir nom o'z shriftida chizilgan **rasm** ko'rinishida
@@ -202,6 +223,7 @@ Qo'lda ishga tushirish variantlari:
 | Kirill harflar boshqacha ko'rinadi | tanlangan shriftda kirill yo'q — `/fonts` bilan kirillcha biladigan shriftni tanlang |
 | Matn rasm bo'lib qaytmayapti | avval `➕ Yangi daftar` bilan daftar yaratib, `✍️ Matn kiritish` orqali uni tanlang — daftarsiz matn yozilmaydi |
 | Daftar to'ldi | varaqlari tugaganda bot yangi daftar yaratishni aytadi; `📚 Daftarlar` bo'limidan yangisini oching |
+| `⬇️ PDF yuklab olish` ishlamayapti (bo'sh javob) | daftarda hali yozilgan bet yo'q — avval `✍️ Matn kiritish` orqali matn yuboring, keyin yuklab oling |
 | Shrift kutubxonasi yangilanmayapti | `bun scripts/fetch-fonts.ts` ni ishga tushiring; xato bo'lsa internetni tekshiring |
 
 ## Tekshiruvlar
@@ -211,8 +233,13 @@ bun run check          # hamma tekshiruv ketma-ket
 bun run check:render   # namuna varaqalar (PNG), matematika geometriyasi, sahifalash
 bun run check:bot      # bot: soxta Telegram server bilan matn → rasm → yuborish oqimi (token kerak emas)
 bun run check:sheet    # shriftlar ro'yxati rasmi (nomlar o'z shriftida, ingichka varaqa)
+bun run check:pdf      # kitob PDF: tuzilish, JPEG sahifalar, qismlarga bo'lish
 bun run check:deploy   # deploy.sh: clone → .env saqlanishi → git pull → yangilanish (root kerak)
 ```
+
+`check:pdf` PDF ni tahlil qiladi: `xref` jadvalidagi siljishlar haqiqiy obyektlarga ishora
+qilishini, har bir sahifada ochiladigan JPEG rasm borligini va daftar betlaridan yasalgan
+kitobda old/orqa tomon chegaralari to'g'ri ekanini tekshiradi.
 
 `check:deploy` haqiqiy `deploy/deploy.sh` ni `/tmp` ichida, stub buyruqlar va lokal git
 repozitoriy bilan sinaydi; shuning uchun u **root** huquqini talab qiladi (skriptning o'zi

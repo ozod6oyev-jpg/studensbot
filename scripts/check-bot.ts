@@ -4,10 +4,12 @@
  * Mahalliy "soxta Telegram" server ko'tariladi, bot unga ulanadi va haqiqiy
  * update yuboriladi. Tekshiriladi:
  *   1. `/start` — salomlashuv va pastdagi (reply) menyu;
- *   2. daftar yaratish (12 varaq) va matnni varaq-tomonga yozish;
+ *   2. daftar yaratish (nom so'rash, 12 varaq) va matnni varaq-tomonga yozish;
  *   3. varaqning orqa tomonida qizil chegara O'NGDA bo'lishi (piksel orqali);
  *   4. sozlamalar bo'limlari: 10 siyoh, 3 qog'oz, yozuv uslubi (rasm varaqasi);
- *   5. `/fonts` ham rasm ko'rinishida kelishi va daftarlar ro'yxati.
+ *   5. `/fonts` ham rasm ko'rinishida kelishi va daftarlar ro'yxati;
+ *   6. daftar kartasi: nom berish va o'zgartirish, hamda daftarni kitob (PDF)
+ *      qilib yuklab olish (fayl haqiqatan PDF ekani tekshiriladi).
  *
  * Token talab qilinmaydi: TELEGRAM_API_BASE mock serverga qaratiladi.
  */
@@ -40,6 +42,8 @@ interface ReceivedPhoto {
   caption: string;
   markup: string;
   method: string;
+  /** Fayl nomi (multipart sarlavhasidagi `filename=`, PDF uchun muhim). */
+  filename: string;
 }
 interface ReceivedText {
   text: string;
@@ -68,6 +72,15 @@ function partBytes(body: Buffer, boundary: string, field: string): Buffer | null
   const nextBoundary = body.indexOf(Buffer.from(`\r\n--${boundary}`), start);
   const end = nextBoundary === -1 ? body.length : nextBoundary;
   return body.subarray(start, end);
+}
+
+/** Multipart bo'lak sarlavhasidan fayl nomini o'qiydi (`filename="..."`). */
+function partFilename(body: Buffer, boundary: string, field: string): string {
+  const marker = Buffer.from(`name="${field}"`);
+  const index = body.indexOf(marker);
+  if (index === -1) return "";
+  const headers = body.subarray(index, body.indexOf("\r\n\r\n", index)).toString("utf8");
+  return /filename="([^"]*)"/.exec(headers)?.[1] ?? "";
 }
 
 /** multipart tanasidan matn maydonini o'qiydi (oxiridagi qator uzunishini olib tashlaydi). */
@@ -154,6 +167,7 @@ async function startMockTelegram(): Promise<MockTelegram> {
             caption: partText(body, boundary, "caption"),
             markup: partText(body, boundary, "reply_markup"),
             method,
+            filename: partFilename(body, boundary, method === "sendPhoto" ? "photo" : "document"),
           });
           reply({ ok: true, result: { message_id: photos.length } });
           break;
@@ -277,13 +291,25 @@ async function main(): Promise<void> {
       `yangi daftar yaratish tugmalari ko'rsatildi (${createKeys.join(", ")})`,
     );
 
-    console.log("\n=== 3-holat: 12 varaqli daftar yaratish ===");
+    console.log("\n=== 3-holat: daftar yaratish — nom so'rash va standart nom ===");
     send("12 varaq");
+    const namePromptOf = (): ReceivedText | undefined =>
+      mock.texts.filter((entry) => entry.text.includes("Daftarga nom bering")).pop();
+    await waitFor(() => Boolean(namePromptOf()), 15000, "nom so'rovi");
+    assert(Boolean(namePromptOf()), "varaq soni tanlangach nom so'raladi");
+    assert(
+      keyboardLabels(namePromptOf()?.markup ?? "").includes("⏭ Nomsiz qoldirish"),
+      "nomsiz qoldirish tugmasi berildi",
+    );
+    send("⏭ Nomsiz qoldirish");
     await waitFor(() => mock.texts.some((entry) => entry.text.includes("yaratildi")), 20000, "daftar yaratildi");
     const created = mock.texts.filter((entry) => entry.text.includes("yaratildi")).pop();
     assert(
-      Boolean(created) && created!.text.includes("12 varaq") && created!.text.includes("24 bet"),
-      `daftar 12 varaq (24 bet) bilan yaratildi: "${created?.text.split("\n")[0]}"`,
+      Boolean(created) &&
+        created!.text.includes("1-daftar") &&
+        created!.text.includes("12 varaq") &&
+        created!.text.includes("24 bet"),
+      `daftar standart nom bilan yaratildi: "${created?.text.split("\n")[0]}"`,
     );
     assert(
       keyboardLabels(created?.markup ?? "").includes(BTN.settings),
@@ -481,11 +507,153 @@ async function main(): Promise<void> {
       `qo'l tebranishi darajalari alohida ochildi (${wobbleKeys.join(", ")})`,
     );
 
+    console.log("\n=== 14-holat: daftar kartasi (yozish, yuklab olish, nomini o'zgartirish) ===");
+    send(BTN.books);
+    const booksListOf = (): ReceivedText | undefined =>
+      mock.texts.filter((entry) => entry.text.includes("Daftarlaringiz")).pop();
+    await waitFor(() => Boolean(booksListOf()), 15000, "daftarlar ro'yxati");
+    const firstBookButton = keyboardLabels(booksListOf()?.markup ?? "").find((label) => /^📖 /.test(label));
+    assert(Boolean(firstBookButton), `daftar tugmasi topildi: "${firstBookButton}"`);
+    const photosBeforeDownload = mock.photos.length;
+    const documentsBeforeDownload = mock.photos.filter((photo) => photo.method === "sendDocument").length;
+    /** Kartalar soni: eski kartani emas, yangisini kutish uchun. */
+    const cardCount = (): number => mock.texts.filter((entry) => entry.text.startsWith("📖 «")).length;
+    const cardsBeforeFirst = cardCount();
+    send(firstBookButton ?? "");
+    const cardOf = (): ReceivedText | undefined =>
+      mock.texts.filter((entry) => entry.text.startsWith("📖 «")).pop();
+    await waitFor(() => cardCount() > cardsBeforeFirst, 15000, "daftar kartasi");
+    const cardKeys = keyboardLabels(cardOf()?.markup ?? "");
+    assert(
+      ["✍️ Shu daftarga yozish", "⬇️ PDF yuklab olish", "✏️ Nomini o'zgartirish", "⬅️ Daftarlar"].every((label) =>
+        cardKeys.includes(label),
+      ),
+      `kartada 4 ta amal bor (${cardKeys.join(", ")})`,
+    );
+    assert(
+      (cardOf()?.text ?? "").includes("2/24 bet") && (cardOf()?.text ?? "").includes("12"),
+      `kartada varaq va bet hisobi ko'rsatilgan: "${cardOf()?.text.split("\n")[0]}"`,
+    );
+
+    console.log("\n=== 15-holat: daftar nomini o'zgartirish ===");
+    send("✏️ Nomini o'zgartirish");
+    await waitFor(
+      () => mock.texts.some((entry) => entry.text.includes("yangi nom yozib yuboring")),
+      15000,
+      "nom so'rovi (o'zgartirish)",
+    );
+    assert(true, "nomini o'zgartirish uchun matn so'raldi");
+    send("Fizika 9-sinf");
+    await waitFor(
+      () => mock.texts.some((entry) => entry.text.includes("Daftar nomi o'zgartirildi")),
+      15000,
+      "nom o'zgartirildi",
+    );
+    const renamed = mock.texts.filter((entry) => entry.text.includes("Daftar nomi o'zgartirildi")).pop();
+    assert(
+      (renamed?.text ?? "").includes("«Fizika 9-sinf»"),
+      `nom yangilandi: "${renamed?.text.split("\n")[0]}"`,
+    );
+    assert(
+      keyboardLabels(renamed?.markup ?? "").includes("⬇️ PDF yuklab olish"),
+      "nom o'zgarganidan keyin karta qaytdi",
+    );
+
+    console.log("\n=== 16-holat: daftarni kitob (PDF) qilib yuklab olish ===");
+    send("⬇️ PDF yuklab olish");
+    await waitFor(
+      () => mock.photos.filter((photo) => photo.method === "sendDocument").length > documentsBeforeDownload,
+      120000,
+      "PDF kitob",
+    );
+    const book = mock.photos.filter((photo) => photo.method === "sendDocument").pop();
+    assert(Boolean(book), "daftar hujjat sifatida yuborildi");
+    assert(
+      (book?.bytes.subarray(0, 5).toString("latin1") ?? "") === "%PDF-",
+      `fayl haqiqiy PDF: "${book?.bytes.subarray(0, 8).toString("latin1")}"`,
+    );
+    assert(book?.filename === "fizika-9-sinf.pdf", `fayl nomi daftar nomidan olindi: "${book?.filename}"`);
+    const ascii = book?.bytes.toString("latin1") ?? "";
+    const pdfPages = (ascii.match(/\/Type\s*\/Page(?![s])/g) ?? []).length;
+    assert(pdfPages === 2, `kitobda band betlar soni qadar sahifa bor (${pdfPages} = 2)`);
+    assert(ascii.includes("/DCTDecode"), "kitob sahifalari JPEG rasm sifatida joylashtirilgan");
+    assert(
+      ascii.includes("startxref") && ascii.trimEnd().endsWith("%%EOF"),
+      "PDF xref jadvali va yakuni joyida",
+    );
+    assert(
+      (book?.caption ?? "").includes("«Fizika 9-sinf»") && (book?.caption ?? "").includes("2 bet"),
+      `kitob izohi to'g'ri: "${book?.caption.split("\n")[0]}"`,
+    );
+    assert(
+      (book?.markup ?? "").includes("keyboard"),
+      "kitobdan keyin ham pastdagi menyu qoldi",
+    );
+
+    console.log("\n=== 17-holat: bir xil nomli daftar va bo'sh daftarni yuklash ===");
+    send(BTN.newBook);
+    await waitFor(() => mock.texts.some((entry) => entry.text.includes("varaq sonini tanlang")), 15000, "varaq tanlash");
+    send("12 varaq");
+    await waitFor(
+      () => mock.texts.filter((entry) => entry.text.includes("Daftarga nom bering")).length > 0,
+      15000,
+      "nom so'rovi (yangi daftar)",
+    );
+    const beforeNamed = mock.texts.filter((entry) => entry.text.includes("yaratildi")).length;
+    send("Fizika 9-sinf");
+    await waitFor(
+      () => mock.texts.filter((entry) => entry.text.includes("yaratildi")).length > beforeNamed,
+      20000,
+      "nom bilan yaratish",
+    );
+    const named = mock.texts.filter((entry) => entry.text.includes("yaratildi")).pop();
+    assert(
+      (named?.text ?? "").includes("«Fizika 9-sinf (2)»"),
+      `nom takrorlanmasligi ta'minlandi: "${named?.text.split("\n")[0]}"`,
+    );
+
+    const listsBefore = mock.texts.filter((entry) => entry.text.includes("Daftarlaringiz")).length;
+    send(BTN.books);
+    await waitFor(
+      () => mock.texts.filter((entry) => entry.text.includes("Daftarlaringiz")).length > listsBefore,
+      15000,
+      "daftarlar ro'yxati (2)",
+    );
+    const emptyBookButton = keyboardLabels(booksListOf()?.markup ?? "").find((label) =>
+      label.includes("Fizika 9-sinf (2)"),
+    );
+    assert(Boolean(emptyBookButton), `yangi daftar ro'yxatda: "${emptyBookButton}"`);
+    assert(
+      keyboardLabels(booksListOf()?.markup ?? "").some((label) => label.includes("Fizika 9-sinf • 2/24")),
+      "nom o'zgargan daftar ham ro'yxatda yangi nomi bilan",
+    );
+    const documentsBeforeEmpty = mock.photos.filter((photo) => photo.method === "sendDocument").length;
+    const cardsBeforeEmpty = cardCount();
+    send(emptyBookButton ?? "");
+    await waitFor(() => cardCount() > cardsBeforeEmpty, 15000, "bo'sh daftar kartasi");
+    send("⬇️ PDF yuklab olish");
+    await waitFor(
+      () => mock.texts.some((entry) => entry.text.includes("hali yozilgan bet yo'q")),
+      30000,
+      "bo'sh daftar ogohlantirishi",
+    );
+    assert(true, "bo'sh daftar uchun PDF o'rniga ogohlantirish yuborildi");
+    assert(
+      mock.photos.filter((photo) => photo.method === "sendDocument").length === documentsBeforeEmpty,
+      "bo'sh daftar uchun ortiqcha fayl yuborilmadi",
+    );
+    assert(mock.photos.length >= photosBeforeDownload, "rasmlar oqimi ham ishlashda davom etdi");
+
     console.log(
       `\nAPI chaqiruvlari: ${["getMe", "deleteWebhook", "getUpdates", "sendChatAction", "sendPhoto", "sendDocument"]
         .map((call) => `${call}×${mock.calls.filter((item) => item === call).length}`)
         .join(", ")}`,
     );
+  } catch (error) {
+    // Kutilmagan xato bo'lsa bot loglarini ko'rsatamiz — sababini topish uchun.
+    const tail = logs.join("").trim();
+    if (tail) console.log(`\nBot loglari:\n${tail.slice(-2000)}`);
+    throw error;
   } finally {
     child.kill("SIGKILL");
     mock.server.close();

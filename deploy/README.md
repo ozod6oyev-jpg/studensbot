@@ -111,9 +111,15 @@ Bot pastdagi **doimiy menyu** bilan ishlaydi (tugmalar chat ichida emas):
 ```
 
 - `➕ Yangi daftar` → varaq soni tanlanadi: 12 / 36 / 48 / 96 (har varaqning ikki tomoni bor —
-  jami 24/72/96/192 bet);
+  jami 24/72/96/192 bet), keyin bot daftar nomini so'raydi — matn yuborsangiz shu nom, `⏭ Nomsiz
+  qoldirish` bosilsa standart nom (`1-daftar`, keyingisi `2-daftar`) qo'yiladi;
 - `✍️ Matn kiritish` → daftarlar ro'yxati chiqadi; daftar hali bo'lmasa, avval yangi daftar
   yaratish kerakligi aytiladi;
+- `📚 Daftarlar` ichida `📖 <nom> • 5/24` tugmasi bosilsa daftar kartasi ochiladi:
+  `✍️ Shu daftarga yozish`, `⬇️ PDF yuklab olish`, `✏️ Nomini o'zgartirish`, `⬅️ Daftarlar`;
+- `⬇️ PDF yuklab olish` daftarning yozilgan betlarini A4 ko'p betli PDF kitob qilib yuboradi
+  (fayl nomi `<daftar nomi>.pdf`); juda katta daftarda PDF bir necha qismga bo'linadi
+  (`-1-qism`, `-2-qism`, …). Natija har doim **hujjat** sifatida keladi;
 - yuborilgan matn ochiq daftarga varaqma-varaq yoziladi va har bir tomon rasm bo'lib qaytadi:
   old tomonida chegara chapda, orqa tomonida o'ngda (xuddi haqiqiy daftar kabi);
 - `⚙️ Sozlamalar` ichida alohida ochiladi: `🖋 Siyoh rangi` (10 ta rang), `📄 Qog'oz turi`

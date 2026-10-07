@@ -376,7 +376,10 @@ export default function BotSetup() {
                   code: "📐 Yozuv sozlamalari",
                   text: "O'lcham, qo'l tebranishi, qator oralig'i, matematika rejimi va natijani rasm yoki PNG fayl qilib yuborish.",
                 },
-                { code: "📚 Daftarlar", text: "Daftarlar ro'yxati va yangi daftar yaratish." },
+                {
+                  code: "📚 Daftarlar",
+                  text: "Daftarlar ro'yxati va yangi daftar yaratish; daftar tugmasi bosilsa karta ochiladi — yozish, PDF qilib yuklab olish va nomini o'zgartirish.",
+                },
               ]}
             />
             <Badge tone="sage">Maslahat: adabiyot uchun Yo'l-yo'l + Marck Script, matematika uchun Katak + Caveat</Badge>
@@ -406,11 +409,18 @@ export default function BotSetup() {
             </p>
           </StepCard>
 
-          <StepCard index={5} title="Daftar yaratish va matn yozish">
+          <StepCard index={5} title="Daftar yaratish, nomlash va matn yozish">
             <p>
               Yozishdan oldin daftar kerak: <code className="font-mono text-[13px]">➕ Yangi daftar</code> ni
               bosing va varaq sonini tanlang — <strong>12</strong>, <strong>36</strong>, <strong>48</strong> yoki{" "}
               <strong>96 varaq</strong>. Har varaqning ikki tomoni bo'ladi, ya'ni jami 24/72/96/192 bet.
+            </p>
+            <p>
+              Varaq soni tanlangach bot <strong>daftar nomini so'raydi</strong>: nomni oddiy matn qilib
+              yuboring — masalan <em>"Matematika 8-sinf"</em>. Nom kerak bo'lmasa{" "}
+              <code className="font-mono text-[13px]">⏭ Nomsiz qoldirish</code> ni bosing va daftar
+              standart nom bilan ochiladi (<code className="font-mono text-[13px]">1-daftar</code>, keyingisi{" "}
+              <code className="font-mono text-[13px]">2-daftar</code>).
             </p>
             <CommandTable
               rows={[
@@ -423,6 +433,10 @@ export default function BotSetup() {
                   text: "Daftar tugmasi: nomi va nechta bet band qilinganini ko'rsatadi.",
                 },
                 {
+                  code: "✏️ yangi nom",
+                  text: "Daftar nomini keyin ham o'zgartirasiz: daftar kartasidagi ✏️ Nomini o'zgartirish bosilgach yangi nomni matn qilib yuboring.",
+                },
+                {
                   code: "yuborilgan matn",
                   text: "Tanlangan daftarga varaqma-varaq yoziladi va har bir tomon alohida rasm bo'lib qaytadi.",
                 },
@@ -432,6 +446,34 @@ export default function BotSetup() {
               Varaqning <strong>old tomonida</strong> qizil chegara chapda, <strong>orqa tomonida</strong> esa
               o'ngda bo'ladi — yozuv varaqdan varaqqa shu tartibda davom etadi. Daftar varaqlari tugaganda bot
               yangi daftar yaratishni aytadi.
+            </Notice>
+            <p className="pt-2 font-semibold text-ink">Daftar kartasi va kitobdek yuklab olish</p>
+            <p>
+              <code className="font-mono text-[13px]">📚 Daftarlar</code> bo'limida daftar tugmasi bosilsa
+              uning kartasi ochiladi — har bir amal alohida tugmada:
+            </p>
+            <CommandTable
+              rows={[
+                {
+                  code: "✍️ Shu daftarga yozish",
+                  text: "Daftarni ochadi; keyingi matnlar shu daftarga yoziladi.",
+                },
+                {
+                  code: "⬇️ PDF yuklab olish",
+                  text: "Daftarning barcha yozilgan betlarini A4 ko'p betli bitta PDF kitob qilib yuboradi (fayl: <daftar nomi>.pdf). Juda katta daftarda PDF bir necha qismga bo'linadi (-1-qism, -2-qism, …).",
+                },
+                {
+                  code: "✏️ Nomini o'zgartirish",
+                  text: "Daftarga yangi nom berish — yangi nomni keyingi xabar qilib yuborasiz.",
+                },
+                { code: "⬅️ Daftarlar", text: "Ro'yxatga qaytish." },
+              ]}
+            />
+            <Notice title="Kitobdek, varaqma-varaq">
+              PDF'da har bir bet alohida A4 sahifa: old tomonida chegara chapda, orqa tomonida o'ngda —
+              yuklab olgan kitobingiz terilgan daftar kabi varaqma-varaq o'qiladi. PDF har doim hujjat
+              (fayl) sifatida keladi, ya'ni{" "}
+              <code className="font-mono text-[13px]">🖼 Yuborish turi</code> sozlamasiga bog'liq emas.
             </Notice>
           </StepCard>
 

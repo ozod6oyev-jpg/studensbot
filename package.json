@@ -12,8 +12,9 @@
     "bot:webhook": "bun bot/index.ts webhook",
     "bot:poll": "bun bot/index.ts poll",
     "fonts:fetch": "bun scripts/fetch-fonts.ts",
-    "check": "bun scripts/check-render.ts && bun scripts/check-bot.ts && bun scripts/check-font-sheet.ts && bun scripts/check-deploy.ts",
+    "check": "bun scripts/check-render.ts && bun scripts/check-pdf.ts && bun scripts/check-bot.ts && bun scripts/check-font-sheet.ts && bun scripts/check-deploy.ts",
     "check:render": "bun scripts/check-render.ts",
+    "check:pdf": "bun scripts/check-pdf.ts",
     "check:bot": "bun scripts/check-bot.ts",
     "check:sheet": "bun scripts/check-font-sheet.ts",
     "check:deploy": "bun scripts/check-deploy.ts"
@@ -21,6 +22,7 @@
   "dependencies": {
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "jpeg-js": "^0.4.4",
     "lucide-react": "^0.468.0",
     "opentype.js": "^1.3.4",
     "react": "^18.3.1",

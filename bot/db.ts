@@ -47,6 +47,8 @@ export interface NotebookStore {
   /** Mavjud tomonning matnini almashtiradi. */
   setSideText(id: string, sideIndex: number, text: string): Promise<boolean>;
   create(input: { chatId: number; sheets: NotebookSheets; title?: string }): Promise<Notebook>;
+  /** Daftar nomini almashtiradi (bo'sh nom rad etiladi). */
+  rename(id: string, title: string): Promise<boolean>;
   /** Ochiq daftar — faqat xotirada saqlanadi (faylga yozilmaydi). */
   setActive(chatId: number, id: string | null): void;
   activeId(chatId: number): string | undefined;
@@ -66,6 +68,24 @@ export function capacityOf(notebook: Notebook): number {
 
 export function usedSidesOf(notebook: Notebook): number {
   return notebook.sides.length;
+}
+
+/** Daftar nomining eng katta uzunligi (tugma matniga sig'ishi uchun). */
+export const TITLE_MAX = 40;
+
+/**
+ * Foydalanuvchi yozgan nomni tozalaydi: ortiqcha bo'shliq va boshqaruv
+ * belgilari olib tashlanadi, uzunlik cheklanadi. Bo'sh natija `null`.
+ */
+export function cleanTitle(value: string): string | null {
+  // Boshqaruv belgilari va yangi qatorlar PDF hamda tugma matnini buzadi.
+  const cleaned = value
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, TITLE_MAX)
+    .trim();
+  return cleaned.length > 0 ? cleaned : null;
 }
 
 /** Fayldagi yozuvni tekshirib, to'g'ri shaklga keltiradi (buzilganlar tashlanadi). */
@@ -194,13 +214,24 @@ export async function createStore(dataDir: string): Promise<NotebookStore> {
         id: nextId(),
         chatId: input.chatId,
         sheets: input.sheets,
-        title: input.title?.trim() || `${existing.length + 1}-daftar`,
+        title: (input.title ? cleanTitle(input.title) : null) ?? `${existing.length + 1}-daftar`,
         createdAt: Date.now(),
         sides: [],
       };
       notebooks.set(notebook.id, notebook);
       await save();
       return notebook;
+    },
+
+    async rename(id: string, title: string): Promise<boolean> {
+      const notebook = notebooks.get(id);
+      if (!notebook) return false;
+      const cleaned = cleanTitle(title);
+      if (!cleaned) return false;
+
+      notebook.title = cleaned;
+      await save();
+      return true;
     },
 
     setActive(chatId: number, id: string | null): void {

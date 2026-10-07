@@ -13,6 +13,10 @@
  * 12/36/48/96 varaqdan iborat, varaqning old tomonida chegara chapda, orqa
  * tomonida — o'ngda (xuddi haqiqiy daftar kabi).
  *
+ * `📚 Daftarlar` bo'limida har bir daftar uchun karta bor: daftarga yozish,
+ * uni **kitob (PDF) qilib yuklab olish**, nomini o'zgartirish. Yangi daftarga
+ * varaq soni tanlangach nom ham beriladi (nomsiz qoldirilsa `N-daftar`).
+ *
  * Ishga tushirish:
  *   bun bot/index.ts                 # long polling (eng oddiy usul)
  *   bun bot/index.ts poll
@@ -29,11 +33,12 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderNotebook } from "../src/lib/handwriting/render";
 import { renderFontSheet } from "../src/lib/handwriting/font-sheet";
+import { renderNotebookPdf, slugifyTitle } from "../src/lib/handwriting/notebook-pdf";
 import { fitToSingleSide } from "../src/lib/handwriting/fit";
 import { FALLBACK_FONT_ID, FONT_LIBRARY, fontEntry } from "../src/lib/handwriting/fonts.generated";
 import { INK_OPTIONS, PAPER_OPTIONS, categoryLabel, fontSupportsCyrillic } from "../src/lib/handwriting/options";
 import { fontDisplayName, fontSummary } from "../src/lib/handwriting/names";
-import { createStore, type Notebook, type NotebookSheets, type NotebookStore } from "./db";
+import { cleanTitle, createStore, type Notebook, type NotebookSheets, type NotebookStore } from "./db";
 import {
   DEFAULT_STYLE,
   type FontId,
@@ -99,6 +104,11 @@ type MenuId =
   | "books"
   | "newbook";
 
+/** Bot matn kutayotgan holat: daftarga nom berish yoki nomini o'zgartirish. */
+type PendingInput =
+  | { kind: "create"; sheets: NotebookSheets }
+  | { kind: "rename"; id: string };
+
 /** Har bir chat uchun saqlanadigan sozlamalar. */
 type ChatSettings = Partial<NotebookStyle> & {
   asFile?: boolean;
@@ -108,6 +118,14 @@ type ChatSettings = Partial<NotebookStyle> & {
   fontPage?: number;
   /** Ochiq daftar id'si. */
   notebookId?: string;
+  /** Bot matn kutayotgan bo'lsa (nom kiritish uchun). */
+  pending?: PendingInput;
+  /** Ochiq daftar kartasi — karta tugmalari shu daftarga tegishli. */
+  cardId?: string;
+  /** Daftar tugmasi matni → daftar id (nomlar bir xil bo'lishi mumkin). */
+  bookButtons?: Record<string, string>;
+  /** `📚 Daftarlar` ro'yxatida daftar bosilganda nima bo'ladi. */
+  booksAction?: "write" | "manage";
 };
 type SettingsMap = Record<string, ChatSettings>;
 /** Chizish uchun yuklangan shrift baytlari (kalit — shrift id'si). */
@@ -139,6 +157,10 @@ const L = {
   gapMenu: "📏 Qator oralig'i",
   mathMenu: "🔢 Matematika",
   sendMenu: "🖼 Yuborish turi",
+  cardWrite: "✍️ Shu daftarga yozish",
+  cardDownload: "⬇️ PDF yuklab olish",
+  cardRename: "✏️ Nomini o'zgartirish",
+  skipName: "⏭ Nomsiz qoldirish",
 } as const;
 
 const PAPER_LABEL: Record<PaperType, string> = {
@@ -219,6 +241,10 @@ const MAX_RENDER_PAGES = 4;
 const MAX_CHARS = 4000;
 const SIZE_MIN = SIZE_OPTIONS[0];
 const SIZE_MAX = SIZE_OPTIONS[SIZE_OPTIONS.length - 1];
+/** PDF qismining eng katta hajmi (Telegram bitta faylga ~50 MB qo'yadi). */
+const PDF_VOLUME_BYTES = 18 * 1024 * 1024;
+/** Jarayon xabari necha betdan keyin yangilanadi. */
+const PDF_PROGRESS_STEP = 8;
 const WEBHOOK_PATH = "/telegram/webhook";
 const CYRILLIC_RE = /[\u0400-\u04FF]/;
 
@@ -241,8 +267,11 @@ const HELP_TEXT = [
   PAPER_IDS.map((id) => `/${id}`).join(" ") + " — qog'oz turi",
   "/help — shu yordam",
   "",
-  "Daftarlar: ➕ Yangi daftar (12/36/48/96 varaq). Yozgan matningiz varaq-tomonga",
-  "ketma-ket tushadi: old tomonda chegara chapda, orqa tomonda — o'ngda.",
+  "Daftarlar: ➕ Yangi daftar (12/36/48/96 varaq) — varaq sonini tanlagach nom ham",
+  "beriladi. Yozgan matningiz varaq-tomonga ketma-ket tushadi: old tomonda chegara",
+  "chapda, orqa tomonda — o'ngda.",
+  "📚 Daftarlar bo'limida har bir daftar kartasi bor: yozish, kitob (PDF) qilib",
+  "yuklab olish va nomini o'zgartirish.",
   "",
   "Matematika yozuvi:",
   "• daraja: x^2, x^{10}",
@@ -391,14 +420,27 @@ function tg<T>(method: string, body?: Record<string, unknown>): Promise<T> {
   });
 }
 
-/** Matn yuboradi (ixtiyoriy pastki klaviatura bilan). */
-async function sendMessage(chatId: number, text: string, markup?: TgMarkup): Promise<void> {
-  await tg("sendMessage", {
+/** Matn yuboradi (ixtiyoriy pastki klaviatura bilan). Xabar id'sini qaytaradi. */
+async function sendMessage(chatId: number, text: string, markup?: TgMarkup): Promise<number | undefined> {
+  const result = await tg<{ message_id?: number }>("sendMessage", {
     chat_id: chatId,
     text,
     disable_web_page_preview: true,
     ...(markup ? { reply_markup: markup } : {}),
   });
+  return result?.message_id;
+}
+
+/**
+ * Mavjud xabar matnini yangilaydi (masalan, PDF tayyorlash jarayoni). Xato
+ * bo'lsa jim o'tadi — bu shunchaki ko'rsatkich, asosiy ishni to'xtatmaydi.
+ */
+async function editMessage(chatId: number, messageId: number, text: string): Promise<void> {
+  try {
+    await tg("editMessageText", { chat_id: chatId, message_id: messageId, text });
+  } catch (error) {
+    console.warn("editMessageText bajarilmadi:", (error as Error).message);
+  }
 }
 
 /** PNG'ni rasm (yoki fayl) sifatida yuboradi. */
@@ -423,6 +465,21 @@ async function sendPng(
     form.append("photo", blob, options.filename);
     await tgRequest("sendPhoto", { method: "POST", body: form });
   }
+}
+
+/** Ixtiyoriy fayl (masalan, PDF kitob) yuboradi. */
+async function sendDocumentFile(
+  chatId: number,
+  bytes: Uint8Array,
+  options: { filename: string; mime: string; caption?: string; markup?: TgMarkup },
+): Promise<void> {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  if (options.caption) form.append("caption", options.caption.slice(0, 1000));
+  if (options.markup) form.append("reply_markup", JSON.stringify(options.markup));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  form.append("document", new Blob([buffer], { type: options.mime }), options.filename);
+  await tgRequest("sendDocument", { method: "POST", body: form });
 }
 
 /* ------------------------------------------------------------------ */
@@ -590,14 +647,42 @@ function fontKeyboard(chatId: number, page: number, pageFonts: FontId[]): TgMark
   return reply(rows);
 }
 
-/** Daftarlar ro'yxati: har bir daftar alohida qatorda. */
-function booksKeyboard(chatId: number, list: Notebook[], store: NotebookStore): TgMarkup {
+/**
+ * Daftarlar ro'yxati: har bir daftar alohida qatorda. Tugma matni → daftar id
+ * xaritasi sozlamalarga yoziladi, chunki nomlar takrorlanishi mumkin (nomni
+ * o'zgartirish mumkin bo'lgani uchun nomga tayanib bo'lmaydi).
+ */
+async function booksKeyboard(chatId: number, list: Notebook[], store: NotebookStore): Promise<TgMarkup> {
   const rows: string[][] = [];
+  const map: Record<string, string> = {};
   for (const notebook of list.slice(0, 8)) {
-    rows.push([notebookButton(notebook, store)]);
+    const label = notebookButton(notebook, store);
+    map[label] = notebook.id;
+    rows.push([label]);
   }
   rows.push([L.newBook, L.backMain]);
+  await updateSettings(chatId, { bookButtons: map });
   return reply(rows);
+}
+
+/** Daftar kartasi tugmalari: yozish, yuklab olish, nomini o'zgartirish. */
+function cardKeyboard(): TgMarkup {
+  return reply([[L.cardWrite], [L.cardDownload], [L.cardRename], [L.backBooks]]);
+}
+
+/** Daftar kartasi: nom, varaq/bet hisobi va amallar izohi. */
+function cardText(chatId: number, notebook: Notebook, store: NotebookStore): string {
+  const used = store.usedSides(notebook);
+  const capacity = store.capacity(notebook);
+  const active = rawSettings(chatId).notebookId === notebook.id;
+  return [
+    `📖 «${notebook.title}»${active ? " — ochiq daftar" : ""}`,
+    "",
+    `• Varaq: ${notebook.sheets} (${capacity} bet)`,
+    `• Band: ${used}/${capacity} bet`,
+    "",
+    `Amalni tanlang: ${L.cardWrite}, ${L.cardDownload} yoki ${L.cardRename}.`,
+  ].join("\n");
 }
 
 function newBookKeyboard(): TgMarkup {
@@ -613,6 +698,27 @@ function notebookButton(notebook: Notebook, store: NotebookStore): string {
   return `📖 ${notebook.title} • ${store.usedSides(notebook)}/${store.capacity(notebook)}`;
 }
 
+/** Chatda band bo'lmagan nom: «Matematika» band bo'lsa «Matematika (2)». */
+function uniqueTitle(list: Notebook[], wanted: string, excludeId?: string): string {
+  const taken = new Set(list.filter((notebook) => notebook.id !== excludeId).map((notebook) => notebook.title));
+  if (!taken.has(wanted)) return wanted;
+  for (let index = 2; index < 100; index += 1) {
+    const candidate = `${wanted} (${index})`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${wanted} (${Date.now() % 1000})`;
+}
+
+/** Nomsiz qoldirilganda beriladigan nom: eng kichik band bo'lmagan «N-daftar». */
+function defaultBookTitle(list: Notebook[]): string {
+  const taken = new Set(list.map((notebook) => notebook.title));
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = `${index}-daftar`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return "daftar";
+}
+
 /* ------------------------------------------------------------------ */
 /* Menyu matnlari                                                      */
 /* ------------------------------------------------------------------ */
@@ -621,9 +727,11 @@ function welcomeText(): string {
   return [
     "👋 Assalomu alaykum! Men Daftar Bot — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
     "",
-    `📚 Avval ${L.newBook} bilan daftar yaratasiz (12, 36, 48 yoki 96 varaq),`,
+    `📚 Avval ${L.newBook} bilan daftar yaratasiz (12, 36, 48 yoki 96 varaq va nom),`,
     `✍️ keyin ${L.text} orqali daftarni tanlab matn yuborasiz.`,
     "",
+    `${L.books} bo'limida har bir daftar kartasi bor: ${L.cardWrite}, ${L.cardDownload},`,
+    `${L.cardRename}.`,
     `${L.settings} ichida: siyoh rangi (10 xil), qog'oz turi (3 xil), yozuv uslubi`,
     `(${FONT_LIBRARY.length} qo'lyozma shrift) va yozuv sozlamalari bor.`,
   ].join("\n");
@@ -766,7 +874,7 @@ async function openMenu(chatId: number, menu: MenuId): Promise<void> {
         );
         return;
       }
-      await sendMessage(chatId, booksText(chatId, list, store), booksKeyboard(chatId, list, store));
+      await sendMessage(chatId, booksText(chatId, list, store), await booksKeyboard(chatId, list, store));
       return;
     }
     default:
@@ -784,9 +892,22 @@ function booksText(chatId: number, list: Notebook[], store: NotebookStore): stri
       return `${notebookButton(notebook, store)}${tag}`;
     }),
     "",
-    "Matn yozish uchun daftarni tanlang yoki ➕ Yangi daftar bilan yangisini oching.",
+    `Daftarni bosing — kartasida yozish, kitob (PDF) qilib yuklab olish va nomini`,
+    `o'zgartirish bor. Yangi daftar uchun ${L.newBook} tugmasini bosing.`,
   ];
   return lines.join("\n");
+}
+
+/** Daftar kartasini ochadi (yozish, yuklab olish, nomini o'zgartirish). */
+async function openCard(chatId: number, notebookId: string): Promise<void> {
+  const store = await books();
+  const notebook = store.get(notebookId);
+  if (!notebook || notebook.chatId !== chatId) {
+    await openMenu(chatId, "books");
+    return;
+  }
+  await updateSettings(chatId, { menu: "books", cardId: notebook.id });
+  await sendMessage(chatId, cardText(chatId, notebook, store), cardKeyboard());
 }
 
 /** Shrift varaqasining bir sahifasini rasm ko'rinishida yuboradi. */
@@ -1034,15 +1155,33 @@ async function offerNotebooks(chatId: number): Promise<void> {
       "",
       "Daftarni tanlang yoki ➕ Yangi daftar bilan yangisini oching.",
     ].join("\n"),
-    booksKeyboard(chatId, list, store),
+    await booksKeyboard(chatId, list, store),
   );
-  await updateSettings(chatId, { menu: "books" });
+  await updateSettings(chatId, { menu: "books", booksAction: "write" });
 }
 
-/** Yangi daftar yaratadi va uni ochadi. */
-async function createNotebook(chatId: number, sheets: NotebookSheets): Promise<void> {
+/** Varaq soni tanlangach nom so'raydi (keyingi matn nom bo'ladi). */
+async function askBookName(chatId: number, sheets: NotebookSheets): Promise<void> {
   const store = await books();
-  const notebook = await store.create({ chatId, sheets });
+  const suggestion = defaultBookTitle(store.list(chatId));
+  await updateSettings(chatId, { pending: { kind: "create", sheets }, menu: "newbook" });
+  await sendMessage(
+    chatId,
+    [
+      `✏️ Daftarga nom bering — keyingi xabaringiz nom bo'ladi (masalan: Matematika 8-sinf).`,
+      "",
+      `Nom kerak bo'lmasa ${L.skipName} tugmasini bosing: «${suggestion}» nomi bilan yaratiladi.`,
+    ].join("\n"),
+    reply([[L.skipName], [L.backBooks]]),
+  );
+}
+
+/** Yangi daftar yaratadi va uni ochadi (nom berilmasa — standart nom). */
+async function createNotebook(chatId: number, sheets: NotebookSheets, title?: string): Promise<void> {
+  const store = await books();
+  const list = store.list(chatId);
+  const wanted = (title ? cleanTitle(title) : null) ?? defaultBookTitle(list);
+  const notebook = await store.create({ chatId, sheets, title: uniqueTitle(list, wanted) });
   await updateSettings(chatId, { notebookId: notebook.id, menu: "main" });
   await sendMessage(
     chatId,
@@ -1056,6 +1195,119 @@ async function createNotebook(chatId: number, sheets: NotebookSheets): Promise<v
   );
 }
 
+/** Daftar nomini almashtiradi (nom band bo'lsa raqam qo'shiladi). */
+async function renameNotebook(chatId: number, notebookId: string, title: string): Promise<void> {
+  const store = await books();
+  const notebook = store.get(notebookId);
+  if (!notebook || notebook.chatId !== chatId) {
+    await sendMessage(chatId, "Daftar topilmadi — 📚 Daftarlar bo'limidan qayta urinib ko'ring.", mainKeyboard());
+    return;
+  }
+
+  const cleaned = cleanTitle(title);
+  if (!cleaned) {
+    await sendMessage(chatId, "Nom bo'sh bo'lmasligi kerak — boshqa nom yozib ko'ring. ✏️", reply([[L.backBooks]]));
+    return;
+  }
+
+  const next = uniqueTitle(store.list(chatId), cleaned, notebookId);
+  if (!(await store.rename(notebookId, next))) {
+    await sendMessage(chatId, "Nomni o'zgartirib bo'lmadi. Keyinroq urinib ko'ring. 🙏", mainKeyboard());
+    return;
+  }
+
+  const updated = store.get(notebookId) as Notebook;
+  await updateSettings(chatId, { cardId: notebookId });
+  await sendMessage(
+    chatId,
+    [`✏️ Daftar nomi o'zgartirildi: «${updated.title}».`, "", cardText(chatId, updated, store)].join("\n"),
+    cardKeyboard(),
+  );
+}
+
+/**
+ * Yozilgan betlarni kitob (PDF) qilib yuboradi.
+ *
+ * Kitob joriy sozlamalar (siyoh, qog'oz, shrift) bilan chiziladi; juda katta
+ * daftarlar bir necha PDF qismiga bo'linadi.
+ */
+async function sendNotebookBook(chatId: number, notebook: Notebook): Promise<void> {
+  const filled = notebook.sides
+    .map((side, index) => ({ text: side.text, index }))
+    .filter((entry) => entry.text.trim().length > 0);
+
+  if (filled.length === 0) {
+    await sendMessage(
+      chatId,
+      [
+        `📄 «${notebook.title}» daftarida hali yozilgan bet yo'q.`,
+        "",
+        "Avval matn yuboring — shundan keyin kitobni yuklab olasiz.",
+      ].join("\n"),
+      cardKeyboard(),
+    );
+    return;
+  }
+
+  const style = styleFor(chatId);
+  const fonts = await fontsFor(style);
+  if (Object.keys(fonts).length === 0) {
+    await sendMessage(chatId, "Kechirasiz, shrift fayllari topilmadi — botni qayta ishga tushirish kerak. 🙏");
+    return;
+  }
+
+  const statusId = await sendMessage(
+    chatId,
+    `📄 «${notebook.title}» kitob qilib tayyorlanmoqda — ${filled.length} bet...`,
+  );
+  await tg("sendChatAction", { chat_id: chatId, action: "upload_document" }).catch(() => undefined);
+
+  const result = await renderNotebookPdf({
+    title: notebook.title,
+    sides: filled.map((entry) => ({ text: entry.text, side: sideOf(entry.index) })),
+    style,
+    fonts,
+    volumeBytes: PDF_VOLUME_BYTES,
+    onPage: async (done, total) => {
+      if (statusId && (done % PDF_PROGRESS_STEP === 0 || done === total)) {
+        await editMessage(
+          chatId,
+          statusId,
+          `📄 «${notebook.title}» kitob qilib tayyorlanmoqda — ${done}/${total} bet...`,
+        );
+      }
+    },
+  });
+
+  const slug = slugifyTitle(notebook.title);
+  const volumes = result.volumes;
+  for (let index = 0; index < volumes.length; index += 1) {
+    const volume = volumes[index];
+    const filename = volumes.length > 1 ? `${slug}-${index + 1}-qism.pdf` : `${slug}.pdf`;
+    const caption = [
+      `📖 «${notebook.title}» — ${volume.pages} bet${volumes.length > 1 ? ` (${index + 1}/${volumes.length} qism)` : ""}`,
+      `${PAPER_SHORT[style.paper]} • ${INK_LABEL[style.ink]} • ${displayName(style.font)}`,
+      volumes.length > 1 ? "Daftar katta bo'lgani uchun kitob qismlarga bo'lindi." : "",
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n");
+    await sendDocumentFile(chatId, volume.pdf, {
+      filename,
+      mime: "application/pdf",
+      caption,
+      markup: index === 0 ? mainKeyboard() : undefined,
+    });
+  }
+
+  if (statusId) {
+    await editMessage(
+      chatId,
+      statusId,
+      `✅ «${notebook.title}» kitob qilib yuborildi — ${result.pages} bet${volumes.length > 1 ? `, ${volumes.length} qism` : ""}.`,
+    );
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Pastki menyu tugmalarini qayta ishlash                              */
 /* ------------------------------------------------------------------ */
@@ -1064,7 +1316,7 @@ async function createNotebook(chatId: number, sheets: NotebookSheets): Promise<v
  * Tugma matnini amalga aylantiradi. `true` qaytsa — matn menyu buyrug'i
  * sifatida bajarildi (daftarga yozilmaydi).
  */
-async function handleMenuLabel(chatId: number, label: string): Promise<boolean> {
+async function handleMenuLabelInner(chatId: number, label: string): Promise<boolean> {
   const style = styleFor(chatId);
 
   // 1. Menyu tugmalari.
@@ -1093,7 +1345,64 @@ async function handleMenuLabel(chatId: number, label: string): Promise<boolean> 
   ];
   const subMenu = subMenus.find(([text]) => text === label);
   if (subMenu) {
+    // `📚 Daftarlar` ro'yxatida daftar bosilganda karta ochiladi; `✍️ Matn
+    // kiritish` ro'yxatida esa daftar to'g'ridan-to'g'ri tanlanadi.
+    if (subMenu[1] === "books") await updateSettings(chatId, { booksAction: "manage" });
     await openMenu(chatId, subMenu[1]);
+    return true;
+  }
+
+  // 1b. Daftar kartasi amallari (karta ochiq bo'lganda ko'rinadi).
+  if (label === L.cardWrite || label === L.cardDownload || label === L.cardRename) {
+    const store = await books();
+    const cardId = rawSettings(chatId).cardId;
+    const notebook = cardId ? store.get(cardId) : undefined;
+    if (!notebook || notebook.chatId !== chatId) {
+      await openMenu(chatId, "books");
+      return true;
+    }
+
+    if (label === L.cardWrite) {
+      await updateSettings(chatId, { notebookId: notebook.id, menu: "main" });
+      await sendMessage(
+        chatId,
+        [
+          `✍️ «${notebook.title}» ochildi — ${store.usedSides(notebook)}/${store.capacity(notebook)} bet band.`,
+          "",
+          "Endi yuborgan matningiz shu daftarga yoziladi.",
+        ].join("\n"),
+        mainKeyboard(),
+      );
+      return true;
+    }
+
+    if (label === L.cardRename) {
+      await updateSettings(chatId, { pending: { kind: "rename", id: notebook.id } });
+      await sendMessage(
+        chatId,
+        [
+          `✏️ «${notebook.title}» uchun yangi nom yozib yuboring.`,
+          "",
+          "Keyingi xabaringiz daftar nomi bo'ladi.",
+        ].join("\n"),
+        reply([[L.backBooks]]),
+      );
+      return true;
+    }
+
+    await sendNotebookBook(chatId, notebook);
+    return true;
+  }
+
+  // 1c. Nomsiz qoldirish (yangi daftarga nom so'ralganda).
+  if (label === L.skipName) {
+    const pending = rawSettings(chatId).pending;
+    if (pending?.kind === "create") {
+      await updateSettings(chatId, { pending: undefined });
+      await createNotebook(chatId, pending.sheets);
+    } else {
+      await openMenu(chatId, "books");
+    }
     return true;
   }
 
@@ -1109,19 +1418,25 @@ async function handleMenuLabel(chatId: number, label: string): Promise<boolean> 
     return true;
   }
 
-  // 3. Varaq soni tanlash (yangi daftar).
+  // 3. Varaq soni tanlash (yangi daftar) — keyin nom so'raladi.
   const sheetChoice = SHEET_BUTTONS.find((option) => option.text === unmark(label));
   if (sheetChoice) {
-    await createNotebook(chatId, sheetChoice.sheets);
+    await askBookName(chatId, sheetChoice.sheets);
     return true;
   }
 
-  // 4. Daftar tanlash.
+  // 4. Daftar tanlash (tugma matni → daftar id xaritasi orqali).
   const store = await books();
   if (label.startsWith("📖 ")) {
-    const title = label.slice("📖 ".length).split(" • ")[0];
-    const notebook = store.list(chatId).find((item) => item.title === title);
-    if (notebook) {
+    const mapped = rawSettings(chatId).bookButtons?.[label];
+    const notebook = mapped
+      ? store.get(mapped)
+      : store.list(chatId).find((item) => label.startsWith(`${notebookButton(item, store)}`));
+    if (notebook && notebook.chatId === chatId) {
+      if (rawSettings(chatId).booksAction === "manage") {
+        await openCard(chatId, notebook.id);
+        return true;
+      }
       await updateSettings(chatId, { notebookId: notebook.id, menu: "main" });
       await sendMessage(
         chatId,
@@ -1209,6 +1524,40 @@ async function handleMenuLabel(chatId: number, label: string): Promise<boolean> 
   return false;
 }
 
+/**
+ * Menyu tugmasini bajaradi va kutib turgan matn holatini boshqaradi.
+ *
+ * Foydalanuvchi menyudan boshqa ishni tanlasa, eski holat (masalan, "nom
+ * kutilmoqda") bekor qilinadi. Diqqat: handler o'zi yangi holat o'rnatgan
+ * bo'lsa (masalan, `➕ Yangi daftar` dan keyin nom so'ralganda) uni
+ * o'chirmasligimiz kerak — shuning uchun holat o'zgarganini ham tekshiramiz.
+ */
+async function handleMenuLabel(chatId: number, label: string): Promise<boolean> {
+  const before = rawSettings(chatId).pending;
+  const handled = await handleMenuLabelInner(chatId, label);
+  const after = rawSettings(chatId).pending;
+  if (handled && before && before === after) await updateSettings(chatId, { pending: undefined });
+  return handled;
+}
+
+/**
+ * Matn kutayotgan holatni bajaradi: yangi daftar nomi yoki mavjudining yangi
+ * nomi. `true` qaytsa — matn daftarga yozilmaydi.
+ */
+async function handlePendingText(chatId: number, text: string): Promise<boolean> {
+  const pending = rawSettings(chatId).pending;
+  if (!pending) return false;
+
+  await updateSettings(chatId, { pending: undefined });
+  if (pending.kind === "create") {
+    await createNotebook(chatId, pending.sheets, text);
+    return true;
+  }
+
+  await renameNotebook(chatId, pending.id, text);
+  return true;
+}
+
 /* ------------------------------------------------------------------ */
 /* Buyruqlar                                                           */
 /* ------------------------------------------------------------------ */
@@ -1246,6 +1595,7 @@ async function handleCommand(chatId: number, text: string): Promise<void> {
   }
 
   if (command === "/books" || command === "/daftarlar") {
+    await updateSettings(chatId, { booksAction: "manage" });
     await openMenu(chatId, "books");
     return;
   }
@@ -1353,6 +1703,7 @@ async function processUpdate(update: TgUpdate): Promise<void> {
   }
 
   if (await handleMenuLabel(chatId, text)) return;
+  if (await handlePendingText(chatId, text)) return;
 
   await writeToNotebook(chatId, text);
 }
