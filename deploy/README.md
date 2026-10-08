@@ -25,9 +25,11 @@ ssh sizning_foydalanuvchi@SERVER_IP
 **A) Git orqali (tavsiya etiladi):**
 
 ```bash
-git clone https://github.com/sizning_login/daftar-bot.git
+git clone https://github.com/ozod6oyev-jpg/studensbot.git daftar-bot
 cd daftar-bot
 ```
+
+> Repozitoriy **ochiq (public)** — serverda GitHub logini yoki token so'ralmaydi.
 
 **B) Kompyuteringizdan `rsync` bilan:**
 
@@ -56,7 +58,7 @@ sudo bash deploy/deploy.sh
 Git orqali yuklamoqchi bo'lsangiz, manzilni ham bering — skript o'zi klonlaydi:
 
 ```bash
-sudo bash deploy/deploy.sh https://github.com/sizning_login/daftar-bot.git
+sudo bash deploy/deploy.sh https://github.com/ozod6oyev-jpg/studensbot.git
 ```
 
 Skript nima qiladi:
@@ -172,10 +174,25 @@ o'zingiz bering — skript `/opt/daftar-bot` ni klon qiladi va endi u yerda ham
 
 ```bash
 cd /root
-git clone https://github.com/sizning_login/daftar-bot.git daftar-src
+git clone https://github.com/ozod6oyev-jpg/studensbot.git daftar-src
 cd daftar-src
-sudo bash deploy/deploy.sh https://github.com/sizning_login/daftar-bot.git
+sudo bash deploy/deploy.sh https://github.com/ozod6oyev-jpg/studensbot.git
 ```
+
+Manba nusxa umuman bo'lmasa (masalan faqat `/opt/daftar-bot` bor va uni siz
+bir marta `rsync` bilan ko'chirgansiz), skriptni **o'sha papkaning o'zidan**
+repozitoriy manzili bilan ishga tushirish kifoya — skript o'zini xavfsiz
+nusxaga olib o'tadi, kodni klon qiladi va mavjud `.env` (ya'ni bot tokeni)
+joyida qoldiriladi:
+
+```bash
+sudo bash /opt/daftar-bot/deploy/deploy.sh https://github.com/ozod6oyev-jpg/studensbot.git
+```
+
+> Manzil berilmasa skript to'xtaydi: `Manba va maqsad papka bir xil
+> (/opt/daftar-bot)`. Bu xato emas — `deploy.sh` `/opt/daftar-bot` dan
+> o'zini-o'zi yangilay olmaydi, shuning uchun manzil yoki boshqa manba papka
+> kerak.
 
 > `/opt/daftar-bot` — o'rnatilgan nusxa: `git pull` ni **o'sha papkada** yozish
 > faqat yuqoridagi klon bajarilgan bo'lsa ishlaydi. Klon qilinmagan bo'lsa
@@ -295,9 +312,10 @@ qatorini domeningizga o'zgartiring.
 | `401 Unauthorized` | Token xato yoki bekor qilingan — `@BotFather` dan yangisini olib `.env` ga yozing va xizmatni qayta ishga tushiring |
 | `409 Conflict` | Polling va webhook birga ishlayapti — bittasini to'xtating (`delete-webhook`) |
 | Xizmat ishga tushmayapti | `journalctl -u daftar-bot -n 50` — ko'pincha `.env` da token yo'q yoki Bun yo'li xato |
+| `Manba va maqsad papka bir xil (/opt/daftar-bot)` | Skript `/opt/daftar-bot` ichidan **manzilsiz** ishga tushirilgan — repozitoriy manzilini qo'shib qayta ishga tushiring: `sudo bash /opt/daftar-bot/deploy/deploy.sh https://github.com/ozod6oyev-jpg/studensbot.git` |
 | `fatal: not a git repository` (`/opt/daftar-bot` ichida `git pull`) | Bu o'rnatilgan nusxa, manba emas — kodni manba papkada yangilang (`cd ~/daftar-bot && git pull`), keyin `sudo bash deploy/deploy.sh` |
 | `can't cd to /opt/daftar-bot` | `chown -R daftar:daftar /opt/daftar-bot` |
-| Sozlamalar yoki daftarlar saqlanmayapti | `/var/lib/daftar-bot` papkasi `daftar` foydalanuvchisiga tegishli bo'lishi kerak (`settings.json`, `notebooks.json`) |
+| Sozlamalar yoki daftarlar saqlanmayapti | `/var/lib/daftar-bot` papkasi `daftar` foydalanuvchisiga tegishli bo'lishi kerak (`settings.json`, `notebooks.json`, `styles.json`) |
 | Rasm chiqmayapti | Matn yuborilganini va ochiq daftar borligini tekshiring: matn faqat tanlangan daftarga yoziladi, daftar bo'lmasa bot yangisini yaratishni aytadi |
 | Webhook ishlamayapti | Domen HTTPS bo'lishi va `/telegram/webhook` yo'li proxy qilingan bo'lishi shart |
 
