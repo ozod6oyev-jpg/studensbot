@@ -45,6 +45,11 @@
   h3 {
     letter-spacing: -0.01em;
   }
+
+  /* Telegram Mini App ichida sahifa oxiri tizim paneli ostida qolib ketmasin. */
+  body.mini-app {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
 }
 
 @layer components {

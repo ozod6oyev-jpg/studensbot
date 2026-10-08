@@ -9,13 +9,19 @@
  *     ustki chizig'i ildiz ostidagi ifodadan yuqorida.
  *  3. Uzun matn bir necha varaqqa bo'linishini, kirill va o'zbek tutuq
  *     belgisi ogohlantirishsiz chizilishini tasdiqlaydi.
+ *  4. «Qator tashlab yozish» aynan so'ralgan sonda bo'sh qator qoldirishini
+ *     (o'ralgan paragrafdan keyin ham) va varaqadagi siyoh modelga mos
+ *     kelishini — ya'ni rasmda ham o'sha qatorlar bo'sh turishini tekshiradi.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";
 import { renderNotebook } from "../src/lib/handwriting/render";
 import { FALLBACK_FONT_ID, FONT_LIBRARY, fontEntry } from "../src/lib/handwriting/fonts.generated";
+import { parseFont } from "../src/lib/handwriting/font";
+import { baselineForLine, layoutText } from "../src/lib/handwriting/layout";
+import { appendChunk, measureLineCount, measureSideText } from "../src/lib/handwriting/notebook-text";
 import { INK_OPTIONS } from "../src/lib/handwriting/options";
-import type { NotebookStyle } from "../src/lib/handwriting/types";
+import { DEFAULT_STYLE, type NotebookStyle } from "../src/lib/handwriting/types";
 
 const FONT_DIR = new URL("../src/assets/fonts/", import.meta.url);
 const OUT_DIR = "/tmp/daftar-check";
@@ -601,6 +607,110 @@ async function verifyPagination(): Promise<void> {
   }
 }
 
+/**
+ * «Nechta qator tashlab ketamiz?» savoli aynan shu sonda bo'sh qator
+ * qoldirishini tekshiradi.
+ *
+ * Xato shu yerda edi: bot chizilgan varaqadagi qatorlarni sanab, foydalanuvchiga
+ * «M-qatordan boshlanadi» deb aytardi, ammo yozishda matn uzilishlari (paragraf)
+ * sonidan foydalanardi. Uzun paragraf bir necha qatorga o'ralgani uchun ular
+ * orasidagi farq qancha o'ralsa, shuncha ortiqcha qator tashlab yuborardi
+ * (masalan «⏭ 1» — 3 qator bo'sh qolardi).
+ */
+async function verifySkipLines(): Promise<void> {
+  console.log("\n=== qator tashlab yozish (yozuv joyi) ===");
+  const entry = fontEntry(FALLBACK_FONT_ID);
+  if (!entry) throw new Error(`"${FALLBACK_FONT_ID}" shrifti manifestda topilmadi`);
+  const primary = parseFont(FALLBACK_FONT_ID, await loadLibraryFont(FALLBACK_FONT_ID));
+  const sizeScale = entry.sizeScale ?? 1;
+  // Toza qog'oz: varaqadagi chiziqlar siyoh sanog'iga xalaqit bermasin. Qator
+  // geometriyasi (lineGap, birinchi baseline) chiziqli qog'oz bilan bir xil.
+  const style: NotebookStyle = {
+    ...DEFAULT_STYLE,
+    paper: "plain",
+    marginLine: false,
+    fontSize: 34,
+    lineGap: 56,
+    seed: 5,
+  };
+  const fonts = await loadFonts();
+  const measure = (text: string) => measureSideText({ text, style, primary, sizeScale });
+
+  // O'ralgan paragraf — xato aynan shunday matnda ko'rinardi.
+  const base =
+    "qo'llab-quvvatlash guruhimizga yana murojaat qiling va biz buni siz bilan bosqichma-bosqich ko'rib chiqamiz.";
+  const baseLines = measure(base).lines.length;
+  assert(baseLines >= 2, `namuna paragraf ${baseLines} qatorga o'raladi (o'ralgan holat sinaladi)`);
+
+  const chunk = "Ikkinchi yozuv shu yerdan boshlanadi.";
+  const chunkWord = "Ikkinchi";
+
+  for (const skip of [0, 1, 2]) {
+    // Bot aynan shunday hisoblaydi: davom etiladigan qator + tashlanadigan son.
+    const line = baseLines + 1 + skip;
+    const result = appendChunk(base, chunk, line, baseLines);
+    const measured = measure(result);
+    const startIndex = measured.lines.findIndex((l) => l.words.includes(chunkWord)) + 1;
+    assert(
+      startIndex === line,
+      `⏭ ${skip}: yangi yozuv ${line}-qatordan boshlandi (topilgan: ${startIndex})`,
+    );
+    const blank = startIndex - baseLines - 1;
+    assert(blank === skip, `⏭ ${skip}: oradagi bo'sh qator ${blank} ta (kutilgan: ${skip})`);
+
+    // Rasmda ham xuddi shunday bo'lishi kerak: siyoh faqat matnli qatorda.
+    const rendered = await renderNotebook({ text: result, style, fonts });
+    const png = PNG.sync.read(Buffer.from(rendered.pages[0].png));
+    const layout = layoutText({ text: result, style, primary, sizeScale });
+    const band = Math.round(layout.paper.lineGap * 0.35);
+    const inked: number[] = [];
+    const emptyInked: number[] = [];
+    const wordEmpty: number[] = [];
+
+    layout.lines.forEach((layoutLine, index) => {
+      const baseline = baselineForLine(index, layout);
+      const from = Math.max(0, baseline - band);
+      const to = Math.min(png.height - 1, baseline + band);
+      let hasInk = false;
+      for (let y = from; y <= to && !hasInk; y += 1) {
+        for (let x = layout.textLeft; x < png.width; x += 1) {
+          if (isInk(png, x, y)) {
+            hasInk = true;
+            break;
+          }
+        }
+      }
+      const number = index + 1;
+      // `layoutText` qatoridagi `words` — so'zlar soni (massiv emas).
+      if (layoutLine.words === 0) {
+        if (hasInk) emptyInked.push(number);
+        return;
+      }
+      if (hasInk) inked.push(number);
+      else wordEmpty.push(number);
+    });
+
+    assert(
+      wordEmpty.length === 0,
+      `⏭ ${skip}: matnli qatorlarda siyoh bor (${inked.length} qator${
+        wordEmpty.length > 0 ? `, siyohsiz: ${wordEmpty.join(", ")}` : ""
+      })`,
+    );
+    assert(
+      emptyInked.length === 0,
+      `⏭ ${skip}: bo'sh qatorlarda siyoh yo'q${emptyInked.length > 0 ? ` (siyohli: ${emptyInked.join(", ")})` : ""}`,
+    );
+  }
+
+  // «⬇️ Yozuvning tagidan»: bo'sh qator qoldirmasdan, oxirgi qatorning tagida.
+  const under = appendChunk(base, chunk, baseLines + 1, baseLines);
+  const underStart = measure(under).lines.findIndex((l) => l.words.includes(chunkWord)) + 1;
+  assert(
+    underStart === baseLines + 1,
+    `«yozuvning tagidan» ${baseLines + 1}-qatorda (modelda ${measureLineCount(under)} qator)`,
+  );
+}
+
 async function main(): Promise<void> {
   await mkdir(OUT_DIR, { recursive: true });
 
@@ -615,6 +725,7 @@ async function main(): Promise<void> {
   await verifyInkColors();
   await verifyPageSides();
   await verifyPagination();
+  await verifySkipLines();
 
   console.log(`\nNatijalar: ${OUT_DIR}`);
   if (failures > 0) {

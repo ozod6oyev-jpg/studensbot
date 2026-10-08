@@ -109,24 +109,36 @@ qatorning tagida turadi:
 
 | Bo'lim | Tugmalar |
 | --- | --- |
-| Asosiy menyu (`/start`) | `✍️ Matn kiritish`, `⚙️ Sozlamalar` |
+| Asosiy menyu (`/start`) | `✍️ Matn kiritish`, `⚙️ Sozlamalar` (Mini App sozlangan bo'lsa — `🖥 Studio (Mini App)`) |
 | `⚙️ Sozlamalar` | `🖋 Siyoh rangi`, `📄 Qog'oz turi`, `✍️ Yozuv uslubi`, `📐 Yozuv sozlamalari`, `📚 Daftarlar`, `🖋 Uslubimni nusxalash`, `⬅️ Asosiy menyu` |
 | `🖋 Siyoh rangi` | 10 rang (joriysi ✓ bilan): Ko'k, Qora, Qalam, Yashil, Qizil, Siyohrang, To'q sariq, Pushti, Havorang, Jigarrang |
-| `📄 Qog'oz turi` | `Yo'l-yo'l`, `Katak`, `Toza (A4)` |
+| `📄 Qog'oz turi` | `Yo'l-yo'l`, `Katak`, `Toza (A4)` — daftarsiz varaqalar uchun (daftar ichida daftarning o'z qog'ozi ishlatiladi) |
 | `✍️ Yozuv uslubi` | sahifalab: 8 shriftdan iborat **rasm varaqasi** va `1 Caveat`, `2 Marck Script`, … tugmalari, `⬅️ Oldingi`, `Keyingi ➡️` |
 | `📐 Yozuv sozlamalari` | `🔠 O'lcham`, `〰️ Qo'l tebranishi`, `📏 Qator oralig'i`, `🔢 Matematika`, `🖼 Yuborish turi` |
 | `📚 Daftarlar` | daftarlar ro'yxati (`📖 1-daftar • 5/24`), `➕ Yangi daftar` |
 | daftar kartasi (ro'yxatdagi `📖 …` tugmasi) | `✍️ Shu daftarga yozish`, `⬇️ PDF yuklab olish`, `🛠 Tahrirlash`, `✏️ Nomini o'zgartirish`, `⬅️ Daftarlar` |
-| `➕ Yangi daftar` | `12 varaq`, `36 varaq`, `48 varaq`, `96 varaq`, so'ng nom so'rash: `⏭ Nomsiz qoldirish` |
+| `➕ Yangi daftar` | `12 varaq`, `36 varaq`, `48 varaq`, `96 varaq`, so'ng qog'oz turi: `📏 Yo'l-yo'l daftar`, `🔲 Katak daftar`, `📄 Oq qog'oz`, keyin nom so'rash: `⏭ Nomsiz qoldirish` |
+
+**Mini App (Studio Telegram ichida):** `MINI_APP_URL` sozlangan bo'lsa, bot ishga tushganda
+Telegram'ning **menyu tugmasini** (matn yoziladigan qator yonidagi tugma) Studio sahifasiga
+bog'laydi va pastdagi menyuga `🖥 Studio (Mini App)` tugmasini qo'shadi; `/studio` buyrug'i ham
+shu sahifani ochadigan tugma yuboradi. Sahifa Telegram oynasida ochiladi, matn va sozlamalar
+Telegram imzosi (`initData`) bilan botga yuboriladi, bot esa natijani o'sha chatga rasm qilib
+qaytaradi (serverga joylash: [deploy/README.md](deploy/README.md)).
 
 **Daftar bilan ishlash:** `➕ Yangi daftar` orqali varaq soni (12/36/48/96) tanlanadi — har varaqning
-ikki tomoni bo'ladi, ya'ni jami 24/72/96/192 bet. `✍️ Matn kiritish` daftarlar ro'yxatini chiqaradi;
+ikki tomoni bo'ladi, ya'ni jami 24/72/96/192 bet. So'ng **qog'oz turi** tanlanadi (`📏 Yo'l-yo'l
+daftar`, `🔲 Katak daftar`, `📄 Oq qog'oz`) va bu tanlov **daftarda saqlanadi**: har bir daftarning
+betlari (rasmi, slaydi va PDF kitobi) o'z qog'ozida chiziladi — shuning uchun bitta chatda yo'l-yo'l
+va katak daftar birga turishi mumkin. `✍️ Matn kiritish` daftarlar ro'yxatini chiqaradi;
 hali daftar bo'lmasa, avval yangi daftar yaratish kerakligi aytiladi. Tanlangan daftarga yuborilgan
 matn varaqma-varaq yoziladi va har bir tomon alohida rasm bo'lib qaytadi — old tomonida chegara
 chapda, orqa tomonida o'ngda (xuddi haqiqiy daftar kabi).
 
-**Daftarga nom berish:** varaq soni tanlangach bot nom so'raydi — matn yuborsangiz, daftar shu nom
-bilan yaratiladi. `⏭ Nomsiz qoldirish` bosilsa, nom avtomatik qo'yiladi (`1-daftar`, keyingisi
+**Daftarga nom berish:** varaq soni va qog'oz turi tanlangach bot nom so'raydi — matn yuborsangiz,
+daftar shu nom bilan yaratiladi. Tasdiqda tanlangan qog'oz ham aytiladi (masalan, «✅ «1-daftar»
+yaratildi — 12 varaq (24 bet), katak daftar»), daftar kartasida esa `📄 Qog'oz: katak daftar` qatori
+ko'rinadi. `⏭ Nomsiz qoldirish` bosilsa, nom avtomatik qo'yiladi (`1-daftar`, keyingisi
 `2-daftar`) va daftar ochiladi.
 
 **Daftar kartasi:** `📚 Daftarlar` ro'yxatidagi istalgan `📖 …` tugmasi bosilganda daftar kartasi
@@ -150,7 +162,8 @@ turganini** aytadi va joy tanlashni so'raydi:
 | `➕ Yangi betdan` | keyingi betni ochib, 1-qatordan boshlaydi |
 | `🔢 Qatorni tanlash` | betdagi bo'sh qatorlarni raqamlab beradi — qatorni tanlaysiz |
 
-Keyin bot **nechta qator tashlab ketishni** so'raydi (`⏭ 0`, `⏭ 1`, `⏭ 2`, `⏭ 3`, `⏭ 5`) va
+Keyin bot **nechta qator tashlab ketishni** so'raydi: `⬇️ Yozuvning tagidan` (0 qator — oldingi
+yozuvning tagidan), `⏭ 1`, `⏭ 2`, `⏭ 3`, `⏭ 5` (shuncha qator bo'sh qoladi) va
 "✅ Tayyor! Yozish N-betning M-qatoridan boshlanadi" deb tasdiqlaydi. Shundan keyin yuborilgan matn
 aynan shu joydan boshlab yoziladi; javobda yozuv qayerdan boshlangani va betda **nechta qator toza
 qolgani** qayta sanab beriladi. Yozuv juda uzun bo'lsa, davomi keyingi betdan ketadi.
@@ -176,7 +189,7 @@ qaytadi.
 
 **Daftarni kitobdek yuklab olish:** `⬇️ PDF yuklab olish` bosilganda daftardagi barcha yozilgan
 betlar ketma-ket (old tomon, orqa tomon, keyingi varaq, …) **A4 sahifali ko'p betli PDF** qilib
-yuboriladi (sahifalar joriy sozlamalar — siyoh, qog'oz, shrift — bilan chiziladi) — fayl nomi `<daftar nomi>.pdf`; xuddi asl daftarni varaqlayotgandek o'qib yoki chop etib
+yuboriladi (sahifalar joriy siyoh va shrift hamda **daftarning o'z qog'ozi** bilan chiziladi) — fayl nomi `<daftar nomi>.pdf`; xuddi asl daftarni varaqlayotgandek o'qib yoki chop etib
 bo'ladi. Varaq soni juda ko'p bo'lsa, PDF bir necha qismga bo'linadi (`-1-qism`, `-2-qism`, …). U
 `🖼 Yuborish turi` sozlamasidan qat'i nazar **hujjat** sifatida yuboriladi.
 
@@ -233,6 +246,7 @@ Quyidagi buyruqlar ham ishlashda davom etadi (tez tanlash uchun):
 | `/size 34` | yozuv o'lchami (26–52) |
 | `/file` | natijani rasm emas, PNG fayl qilib yuborish |
 | `/id` | chat ID'ni ko'rsatadi (sozlashda yordam beradi) |
+| `/studio` | Studioni Mini App sifatida ochadigan tugma yuboradi (`MINI_APP_URL` sozlangan bo'lsa) |
 
 ## Muhit o'zgaruvchilari
 
@@ -243,6 +257,7 @@ Quyidagi buyruqlar ham ishlashda davom etadi (tez tanlash uchun):
 | `PORT` | ➖ | webhook server porti (standart `8080`) |
 | `BOT_DATA_DIR` | ➖ | sozlamalar (`settings.json`), daftarlar (`notebooks.json`) va shaxsiy uslublar (`styles.json`) saqlanadigan papka (standart `./bot/data`) |
 | `TELEGRAM_API_BASE` | ➖ | o'z Bot API serveringiz yoki test uchun API manzili (standart `https://api.telegram.org`) |
+| `MINI_APP_URL` | ➖ | Studio sahifasining **HTTPS** manzili (masalan `https://domen.uz/studio`) — Mini App uchun. O'rnatilsa bot menyu tugmasini Studio'ga bog'laydi va pastdagi menyuga `🖥 Studio (Mini App)` tugmasini qo'shadi |
 
 Freebuff'da kalitlarni **Settings → Environment (Keys)** bo'limida qo'shing; mahalliy ishda `.env`
 faylida saqlang. `.env` faylini hech qachon repozitoriyga qo'shmang.
@@ -269,6 +284,30 @@ cd ~/daftar-bot && git pull && sudo bash deploy/deploy.sh   # yangilash (kod pap
 > `/opt/daftar-bot` — **o'rnatilgan** nusxa (`.git` yo'q), shuning uchun u yerda `git pull`
 > xato beradi: kod manba papkada yangilanadi. Batafsil: [deploy/README.md](deploy/README.md).
 
+### Telegram Mini App
+
+Studio'ni Telegram ichida **Mini App** sifatida ochish mumkin: bot menyusidagi tugma bosilsa
+sahifa Telegram oynasida ochiladi, natija esa o'sha chatga qaytadi.
+
+Mini App uchun **domen va HTTPS majburiy** — Telegram faqat `https://` manzillarni qabul
+qiladi, shuning uchun faqat IP manzilli serverda u umuman ochilmaydi. Polling rejimi va
+brauzerdagi Studio esa domensiz ham avvalgidek ishlaydi.
+
+**Domeningiz bo'lmasa ham mumkin:** `sslip.io`/`nip.io` nomi (masalan
+`95.123.45.67.sslip.io`) orqali certbot bilan bepul sertifikat olinadi yoki Cloudflare Tunnel
+bir zumda vaqtinchalik HTTPS manzil beradi — ikkalasi ham qadam-baqadam
+[deploy/README.md](deploy/README.md) da yozilgan.
+
+1. saytni yig'ing: `sudo -u daftar /usr/local/bin/bun run build` (natija — `dist/`);
+2. `/opt/daftar-bot/.env` ga `MINI_APP_URL=https://domen.uz/studio` qatorini qo'shib,
+   `sudo systemctl restart daftar-bot` qiling — bot `PORT` (standart `8080`) portida Mini App
+   endpointini ochadi va menyu tugmasini o'zi o'rnatadi;
+3. nginx (sayt `dist/` dan, `/mini-app/` bot portiga) va certbot sozlamasi to'liq nginx
+   bloki bilan [deploy/README.md](deploy/README.md) da.
+
+Sayt va API turli domenda bo'lsa, yig'ishdan oldin
+`VITE_MINI_APP_ENDPOINT=https://bot.domen.uz/mini-app/send` beriladi.
+
 Qo'lda ishga tushirish variantlari:
 
 - **Studio** — statik sayt. `bun run build` natijasida `dist/` papkasi hosil bo'ladi; uni istalgan statik
@@ -293,6 +332,9 @@ Qo'lda ishga tushirish variantlari:
 | Daftar to'ldi | varaqlari tugaganda bot yangi daftar yaratishni aytadi; `📚 Daftarlar` bo'limidan yangisini oching |
 | `⬇️ PDF yuklab olish` ishlamayapti (bo'sh javob) | daftarda hali yozilgan bet yo'q — avval `✍️ Matn kiritish` orqali matn yuboring, keyin yuklab oling |
 | Shrift kutubxonasi yangilanmayapti | `bun scripts/fetch-fonts.ts` ni ishga tushiring; xato bo'lsa internetni tekshiring |
+| Mini App tugmasi sahifani ochmayapti | Domen HTTPS emas yoki `MINI_APP_URL` xato — sertifikat (`certbot`) va nginx'dagi `/mini-app/` proxy'sini tekshiring |
+| Mini App'da "Telegram ma'lumotlari eskirgan" | `initData` 24 soatdan eski — Mini App'ni yopib, bot menyusidagi tugma bilan qaytadan oching |
+| Mini App'da "Bot serveriga ulanib bo'lmadi" | Bot jarayoni ishlamayapti yoki `PORT`da tinglamayapti: `systemctl status daftar-bot` va `curl -s http://127.0.0.1:8080/healthz` |
 
 ## Tekshiruvlar
 
@@ -300,6 +342,7 @@ Qo'lda ishga tushirish variantlari:
 bun run check          # hamma tekshiruv ketma-ket
 bun run check:render   # namuna varaqalar (PNG), matematika geometriyasi, sahifalash
 bun run check:bot      # bot: soxta Telegram server bilan matn → rasm → yuborish oqimi (token kerak emas)
+bun run check:mini-app # Mini App: initData imzosi, menyu tugmasi va POST /mini-app/send
 bun run check:sheet    # shriftlar ro'yxati rasmi (nomlar o'z shriftida, ingichka varaqa)
 bun run check:pdf      # kitob PDF: tuzilish, JPEG sahifalar, qismlarga bo'lish
 bun run check:deploy   # deploy.sh: clone → .env saqlanishi → git pull → yangilanish (root kerak)
@@ -312,6 +355,12 @@ kitobda old/orqa tomon chegaralari to'g'ri ekanini tekshiradi.
 `check:deploy` haqiqiy `deploy/deploy.sh` ni `/tmp` ichida, stub buyruqlar va lokal git
 repozitoriy bilan sinaydi; shuning uchun u **root** huquqini talab qiladi (skriptning o'zi
 ham root ostida ishlaydi).
+
+`check:mini-app` Mini App zanjirini boshdan-oxiriga tekshiradi: `initData` imzosi qabul
+qilinishi va buzilgan, eskirgan yoki boshqa token bilan imzolangan ma'lumot rad etilishi,
+botning menyu tugmasini Studio'ga bog'lashi (pastdagi menyuda ham) hamda
+`POST /mini-app/send` so'rovi natijasida chatga haqiqiy PNG varaqa kelishi. Mock Telegram
+API ishlatiladi, shuning uchun token yoki internet kerak emas.
 
 `check:render` namunalarni `/tmp/daftar-check/` papkasiga yozadi va natijani ASCII ko'rinishida
 chiqaradi — rasm haqiqatan daftarga o'xshashini shu yerda ko'rish mumkin.

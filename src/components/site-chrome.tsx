@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import { NotebookPen } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useMiniApp } from "@/hooks/use-mini-app";
 
 const links = [
   { href: "/studio", label: "Studio" },
@@ -9,6 +10,12 @@ const links = [
 
 export function SiteHeader({ className }: { className?: string }) {
   const { pathname } = useLocation();
+  const { active } = useMiniApp();
+
+  // Mini App ichida Telegram o'z sarlavhasini chizadi: sayt sarlavhasini
+  // takrorlamaymiz (aks holda ekranda ikkita header bo'lib qoladi) va
+  // foydalanuvchini Telegram oynasidan tashqariga chiqarib yubormaymiz.
+  if (active) return null;
 
   return (
     <header
@@ -59,6 +66,12 @@ export function SiteHeader({ className }: { className?: string }) {
 }
 
 export function SiteFooter() {
+  const { active } = useMiniApp();
+
+  // Mini App ichida sayt futeri ham ortiqcha: Telegram oynasi tor va u yerda
+  // faqat asosiy ish (yozish va chatga yuborish) ko'rinib turishi kerak.
+  if (active) return null;
+
   return (
     <footer className="mt-20 border-t border-paper-edge/80 bg-paper-deep/60">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-pencil/70 sm:flex-row sm:items-center sm:justify-between">

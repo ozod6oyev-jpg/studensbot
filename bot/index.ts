@@ -23,6 +23,13 @@
  * uni **kitob (PDF) qilib yuklab olish**, nomini o'zgartirish. Yangi daftarga
  * varaq soni tanlangach nom ham beriladi (nomsiz qoldirilsa `N-daftar`).
  *
+ * `MINI_APP_URL` o'rnatilgan bo'lsa, bot Studio'ni **Telegram Mini App** sifatida
+ * ochadigan tugmalarni o'zi qo'yadi: chat menyusi tugmasi (`setChatMenuButton`),
+ * pastdagi klaviaturadagi 🖥 tugma va `/studio` buyrug'i. Studio esa matn bilan
+ * birga `initData` ni `/mini-app/send` manziliga yuboradi — bot imzoni tekshirib,
+ * varaqalarni o'sha chatga chizib beradi (webhook shart emas: HTTP server long
+ * polling rejimida ham ishga tushadi).
+ *
  * Ishga tushirish:
  *   bun bot/index.ts                 # long polling (eng oddiy usul)
  *   bun bot/index.ts poll
@@ -30,11 +37,21 @@
  *   bun bot/index.ts info
  *   bun bot/index.ts delete-webhook
  *
- * Env: TELEGRAM_BOT_TOKEN (majburiy), BOT_SECRET (ixtiyoriy), PORT (webhook uchun),
- *      BOT_DATA_DIR (standart: ./bot/data), TELEGRAM_API_BASE (o'z Bot API serveri).
+ * Env: TELEGRAM_BOT_TOKEN (majburiy), BOT_SECRET (ixtiyoriy), PORT (HTTP server uchun),
+ *      BOT_DATA_DIR (standart: ./bot/data), TELEGRAM_API_BASE (o'z Bot API serveri),
+ *      MINI_APP_URL (Studio'ning HTTPS manzili — Mini App uchun),
+ *      MINI_APP_ALLOW_ORIGINS (ixtiyoriy: Mini App uchun qo'shimcha domenlar).
  */
 import { readFile, mkdir, writeFile, rename } from "node:fs/promises";
 import { createServer } from "node:http";
+import {
+  HEALTH_PATH,
+  MINI_APP_PATH,
+  createMiniAppHandler,
+  originFromUrl,
+  type MiniAppRequest,
+  type MiniAppResult,
+} from "./mini-app";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderNotebook } from "../src/lib/handwriting/render";
@@ -42,7 +59,7 @@ import { renderFontSheet } from "../src/lib/handwriting/font-sheet";
 import { renderNotebookPdf, slugifyTitle } from "../src/lib/handwriting/notebook-pdf";
 import { fitToSingleSide } from "../src/lib/handwriting/fit";
 import { FALLBACK_FONT_ID, FONT_LIBRARY, fontEntry } from "../src/lib/handwriting/fonts.generated";
-import { INK_OPTIONS, PAPER_OPTIONS, categoryLabel, fontSupportsCyrillic } from "../src/lib/handwriting/options";
+import { INK_OPTIONS, PAGE_FORMAT_OPTIONS, PAPER_OPTIONS, categoryLabel, fontSupportsCyrillic } from "../src/lib/handwriting/options";
 import { fontDisplayName, fontSummary } from "../src/lib/handwriting/names";
 import { calibrateStyle, personalSummary } from "../src/lib/handwriting/calibrate";
 import { parseFont } from "../src/lib/handwriting/font";
@@ -73,6 +90,7 @@ import {
   type FontId,
   type InkColor,
   type NotebookStyle,
+  type PageFormat,
   type PageSide,
   type PaperType,
   type PersonalStyle,
@@ -112,15 +130,32 @@ interface TgApiResponse<T> {
   parameters?: { retry_after?: number };
 }
 
+/**
+ * Klaviatura tugmasi. `web_app` berilgan tugma Telegram ichida Mini App
+ * (Studio) sahifasini ochadi.
+ */
+interface TgKeyboardButton {
+  text: string;
+  web_app?: { url: string };
+}
+
 /** Pastdagi doimiy klaviatura (reply keyboard). */
 interface TgReplyKeyboard {
-  keyboard: { text: string }[][];
+  keyboard: TgKeyboardButton[][];
   resize_keyboard: boolean;
   is_persistent: boolean;
   input_field_placeholder?: string;
 }
 
-type TgMarkup = TgReplyKeyboard;
+/** Xabar ostidagi (inline) klaviatura — Mini App havolasi uchun. */
+interface TgInlineKeyboard {
+  inline_keyboard: TgKeyboardButton[][];
+}
+
+type TgMarkup = TgReplyKeyboard | TgInlineKeyboard;
+
+/** Tugma tavsifi: oddiy matn yoki Mini App manzili bilan. */
+type ButtonSpec = string | { text: string; webApp: string };
 
 /** Botning ochiq menyulari. */
 type MenuId =
@@ -145,7 +180,7 @@ type MenuId =
  * yangi shaxsiy uslubga nom berish.
  */
 type PendingInput =
-  | { kind: "create"; sheets: NotebookSheets }
+  | { kind: "create"; sheets: NotebookSheets; paper?: PaperType }
   | { kind: "rename"; id: string }
   | { kind: "styleName" };
 
@@ -266,6 +301,7 @@ const L = {
   editDelete: "✂️ Yozuvni o'chirish",
   editUndo: "↩️ Oxirgi amalni qaytarish",
   writeContinue: "▶️ Davom etish",
+  writeUnder: "⬇️ Yozuvning tagidan",
   writeNewSide: "➕ Yangi betdan",
   writePickLine: "🔢 Qatorni tanlash",
   writeUndo: "↩️ Yozuvni orqaga qaytarish",
@@ -279,6 +315,8 @@ const L = {
   styleCancel: "❌ Bekor qilish",
   styleStop: "⏹ Uslubni to'xtatish",
   styleDelete: "🗑 Uslubni o'chirish",
+  // Telegram Mini App (Studio) tugmasi.
+  studio: "🖥 Studio (Mini App)",
 } as const;
 
 /** Namunada yoziladigan so'zlar (har xil harflar uchun 10 ta). */
@@ -310,6 +348,19 @@ const PAPER_SHORT: Record<PaperType, string> = {
   plain: "Toza (A4)",
 };
 
+/**
+ * Yangi daftar yaratishda tanlanadigan qog'oz turlari.
+ *
+ * Tugma matni sozlamalardagi qog'oz tugmalaridan farq qiladi (ular `PAPER_SHORT`
+ * bilan belgilanadi) — shunda yaratish bosqichida bosilgan tugma sozlama
+ * menyusidagi bilan aralashib ketmaydi.
+ */
+const NEWBOOK_PAPERS: { text: string; paper: PaperType }[] = [
+  { text: "📏 Yo'l-yo'l daftar", paper: "lined" },
+  { text: "🔲 Katak daftar", paper: "grid" },
+  { text: "📄 Oq qog'oz", paper: "plain" },
+];
+
 const INK_IDS: InkColor[] = INK_OPTIONS.map((option) => option.id);
 const INK_LABEL = Object.fromEntries(INK_OPTIONS.map((option) => [option.id, option.label])) as Record<
   InkColor,
@@ -325,6 +376,14 @@ const INK_BUTTON = Object.fromEntries(
 ) as Record<InkColor, string>;
 
 const PAPER_IDS: PaperType[] = PAPER_OPTIONS.map((option) => option.id);
+
+/** Varaq formatlari — Mini App'dan kelgan qiymatlarni tekshirish uchun. */
+const PAGE_FORMAT_IDS: PageFormat[] = PAGE_FORMAT_OPTIONS.map((option) => option.id);
+/** CORS uchun qo'shimcha ruxsat etilgan manbalar (`MINI_APP_ALLOW_ORIGINS`). */
+const MINI_APP_EXTRA_ORIGINS = (process.env.MINI_APP_ALLOW_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter((origin) => origin.length > 0);
 
 /** Eng ko'p ishlatiladigan shriftlar uchun qisqa buyruqlar. */
 const QUICK_FONTS: Record<string, FontId> = {
@@ -393,6 +452,7 @@ const HELP_TEXT = [
   "/start — menyuni ko'rsatish",
   "/settings — sozlamalar menyusi",
   "/id — chat ID'ni ko'rsatadi",
+  "/studio — Studio'ni Telegram ichida ochish (Mini App)",
   "/fonts — shriftlar kutubxonasi (rasm ko'rinishida)",
   "/font <id> — shriftni tanlash (masalan /font badscript)",
   `/size ${SIZE_MIN}..${SIZE_MAX} — shrift o'lchami`,
@@ -554,6 +614,34 @@ function apiBase(): string {
   return `${root}/bot${token}`;
 }
 
+let miniAppUrlCache: string | undefined | null = null;
+
+/**
+ * Studio Mini App manzili (`MINI_APP_URL`).
+ *
+ * Telegram `web_app` tugmasi uchun faqat **HTTPS** manzilni qabul qiladi,
+ * shuning uchun `http://` berilgan bo'lsa tugma qo'shilmaydi va bir marta
+ * ogohlantirish chiqadi (qiymat `MINI_APP_URL=https://domen.uz/studio`).
+ */
+function miniAppUrl(): string | undefined {
+  if (miniAppUrlCache !== null) return miniAppUrlCache;
+
+  const raw = process.env.MINI_APP_URL?.trim().replace(/\/+$/, "");
+  if (!raw) {
+    miniAppUrlCache = undefined;
+    return undefined;
+  }
+  if (!/^https:\/\//i.test(raw)) {
+    console.warn(
+      `⚠️  MINI_APP_URL HTTPS bo'lishi kerak (hozir: ${raw}) — Studio tugmasi qo'shilmadi.`,
+    );
+    miniAppUrlCache = undefined;
+    return undefined;
+  }
+  miniAppUrlCache = raw;
+  return raw;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((done) => setTimeout(done, ms));
 }
@@ -707,13 +795,25 @@ function fontsFor(style: NotebookStyle): Promise<FontBytes> {
 /* Menyu klaviaturalari                                                */
 /* ------------------------------------------------------------------ */
 
+/** Tugma tavsifini Telegram kutgan obyektga aylantiradi. */
+function button(spec: ButtonSpec): TgKeyboardButton {
+  return typeof spec === "string" ? { text: spec } : { text: spec.text, web_app: { url: spec.webApp } };
+}
+
 /** Pastdagi klaviaturani yasaydi (tugmalar matni bilan). */
-function reply(rows: string[][]): TgMarkup {
+function reply(rows: ButtonSpec[][]): TgMarkup {
   return {
-    keyboard: rows.map((row) => row.map((text) => ({ text }))),
+    keyboard: rows.map((row) => row.map(button)),
     resize_keyboard: true,
     is_persistent: true,
   };
+}
+
+/** Studio'ni Mini App sifatida ochadigan inline tugma (sozlanmagan bo'lsa — yo'q). */
+function studioMarkup(): TgMarkup | undefined {
+  const url = miniAppUrl();
+  if (!url) return undefined;
+  return { inline_keyboard: [[button({ text: `🖥 ${L.studio}`, webApp: url })]] };
 }
 
 /** Joriy qiymatni ✓ bilan belgilaydi. */
@@ -727,7 +827,11 @@ function unmark(label: string): string {
 }
 
 function mainKeyboard(): TgMarkup {
-  return reply([[L.text, L.settings]]);
+  const rows: ButtonSpec[][] = [[L.text, L.settings]];
+  // Mini App sozlangan bo'lsa — Studio pastdagi menyudan ham ochiladi.
+  const studio = miniAppUrl();
+  if (studio) rows.push([{ text: L.studio, webApp: studio }]);
+  return reply(rows);
 }
 
 function settingsKeyboard(): TgMarkup {
@@ -850,6 +954,7 @@ function cardText(chatId: number, notebook: Notebook, store: NotebookStore): str
     "",
     `• Varaq: ${notebook.sheets} (${capacity} bet)`,
     `• Band: ${used}/${capacity} bet`,
+    `• Qog'oz: ${PAPER_LABEL[notebook.paper]}`,
     "",
     `Amalni tanlang: ${L.cardWrite}, ${L.cardDownload}, ${L.cardEdit} yoki ${L.cardRename}.`,
   ].join("\n");
@@ -861,6 +966,11 @@ function newBookKeyboard(): TgMarkup {
     [SHEET_BUTTONS[2].text, SHEET_BUTTONS[3].text],
     [L.backBooks],
   ]);
+}
+
+/** Yangi daftar uchun qog'oz turi tugmalari (varaq sonidan keyin so'raladi). */
+function newBookPaperKeyboard(): TgMarkup {
+  return reply([...NEWBOOK_PAPERS.map((option) => [option.text]), [L.backBooks]]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1073,6 +1183,39 @@ function welcomeText(): string {
     "",
     `🖋 ${L.styleCopy} — 10 ta so'z va 10 ta raqamni yozib suratga olasiz, bot`,
     "o'lchab, sizning qo'lyozmangizga mos shaxsiy uslub yasaydi.",
+    ...(miniAppUrl()
+      ? [
+          "",
+          `🖥 ${L.studio} — Studio'ni Telegram ichida ochib, matnni yozasiz;`,
+          "natija «Chatga yuborish» tugmasi bilan shu chatga qaytadi.",
+        ]
+      : []),
+  ].join("\n");
+}
+
+/**
+ * `/studio` buyrug'i matni: Mini App havolasi bo'lsa uni ko'rsatadi, aks holda
+ * administrator uchun nima qilish kerakligini aytadi.
+ */
+function studioText(): string {
+  const url = miniAppUrl();
+  if (!url) {
+    return [
+      "🖥 Studio — matnni yozib, daftar varaqasini darhol ko'radigan sahifa.",
+      "",
+      "Uni Telegram ichida (Mini App sifatida) ochish uchun bot egasi",
+      ".env faylida MINI_APP_URL ni HTTPS manzilga o'rnatishi kerak:",
+      "MINI_APP_URL=https://domen.uz/studio",
+      "",
+      "Hozircha Studio'ni oddiy brauzerda ochib ishlatish mumkin.",
+    ].join("\n");
+  }
+  return [
+    "🖥 Studio (Mini App) — Telegram ichida ochiladigan daftar muharriri.",
+    "",
+    "Matnni yozasiz, varaqni darhol ko'rasiz va «Chatga yuborish» tugmasi bilan",
+    "natija shu chatga varaqa bo'lib keladi. Pastdagi tugma yoki shu havola:",
+    url,
   ].join("\n");
 }
 
@@ -1115,7 +1258,8 @@ function paperText(chatId: number): string {
     "",
     ...PAPER_OPTIONS.map((option) => `${mark(style.paper === option.id, PAPER_SHORT[option.id])} — ${option.hint}`),
     "",
-    "Tanlangan qog'oz keyingi barcha varaqalarga qo'llanadi.",
+    "Bu tanlov daftarsiz varaqalar uchun (masalan, Mini App'dan yuborilganda).",
+    "Daftar ichida uning o'z qog'ozi ishlatiladi — u daftar yaratishda tanlanadi.",
   ].join("\n");
 }
 
@@ -1304,13 +1448,22 @@ function sideStyle(chatId: number, sideIndex: number): NotebookStyle {
   return { ...styleFor(chatId), startSide: sideOf(sideIndex) };
 }
 
+/**
+ * Daftar beti uchun uslub: qog'oz turi **daftarning o'zida** saqlanadi, shuning
+ * uchun u chat sozlamasidagi qog'ozdan ustun turadi (bir chatda yo'l-yo'l va
+ * katak daftar birga bo'lishi mumkin).
+ */
+function notebookStyle(chatId: number, notebook: Notebook, sideIndex: number): NotebookStyle {
+  return { ...sideStyle(chatId, sideIndex), paper: notebook.paper };
+}
+
 /** Bitta tomonni chizib, foydalanuvchiga yuboradi. */
 async function sendSide(chatId: number, notebook: Notebook, sideIndex: number): Promise<void> {
   const store = await books();
   const side = notebook.sides[sideIndex];
   if (!side || side.text.trim().length === 0) return;
 
-  const style = sideStyle(chatId, sideIndex);
+  const style = notebookStyle(chatId, notebook, sideIndex);
   const asFile = isFileMode(chatId);
   const fonts = await fontsFor(style);
   if (Object.keys(fonts).length === 0) {
@@ -1357,6 +1510,118 @@ async function sendSide(chatId: number, notebook: Notebook, sideIndex: number): 
       markup: index === 0 ? mainKeyboard() : undefined,
     });
   }
+}
+
+/** Sonni butun songa keltirib, berilgan chegaraga qisqartiradi. */
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+/**
+ * Studio (Mini App) yuborgan sozlamalarni tekshiradi.
+ *
+ * Faqat ma'lum kalitlar qabul qilinadi: `personal` va `startSide` kabi bot
+ * o'zi boshqaradigan maydonlarga Mini App tegmaydi, noto'g'ri qiymatlar esa
+ * chegaraga qisqartiriladi yoki tashlab yuboriladi.
+ */
+function sanitizeStudioStyle(raw: unknown): ChatSettings {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const input = raw as Record<string, unknown>;
+  const style: ChatSettings = {};
+
+  if (typeof input.paper === "string" && (PAPER_IDS as string[]).includes(input.paper)) {
+    style.paper = input.paper as PaperType;
+  }
+  if (typeof input.ink === "string" && (INK_IDS as string[]).includes(input.ink)) {
+    style.ink = input.ink as InkColor;
+  }
+  if (typeof input.font === "string") {
+    const entry = fontEntry(input.font);
+    if (entry) style.font = entry.id;
+  }
+  if (typeof input.fontSize === "number" && Number.isFinite(input.fontSize)) {
+    style.fontSize = clampNumber(input.fontSize, SIZE_MIN, SIZE_MAX);
+  }
+  if (typeof input.lineGap === "number" && Number.isFinite(input.lineGap)) {
+    style.lineGap = clampNumber(input.lineGap, 30, 120);
+  }
+  if (typeof input.marginLeft === "number" && Number.isFinite(input.marginLeft)) {
+    style.marginLeft = clampNumber(input.marginLeft, 40, 260);
+  }
+  if (typeof input.wobble === "number" && Number.isFinite(input.wobble)) {
+    style.wobble = Math.min(1, Math.max(0, input.wobble));
+  }
+  if (typeof input.seed === "number" && Number.isFinite(input.seed)) {
+    style.seed = clampNumber(input.seed, 0, 999_999);
+  }
+  if (typeof input.marginLine === "boolean") style.marginLine = input.marginLine;
+  if (typeof input.mathMode === "boolean") style.mathMode = input.mathMode;
+  if (
+    typeof input.pageFormat === "string" &&
+    (PAGE_FORMAT_IDS as string[]).includes(input.pageFormat)
+  ) {
+    style.pageFormat = input.pageFormat as PageFormat;
+  }
+  return style;
+}
+
+/**
+ * Studio (Mini App) yuborgan matnni chatga qaytaradi.
+ *
+ * Chatda ochiq daftar bo'lsa — botdagi kabi o'sha daftarga yozamiz (baza va
+ * ↩️ orqaga qaytarish tarixi ham ishlaydi). Daftar bo'lmasa, varaqalar shu
+ * chat uslubida chizilib, to'g'ridan-to'g'ri chatga yuboriladi.
+ */
+async function sendMiniAppText(request: MiniAppRequest): Promise<MiniAppResult> {
+  const chatId = request.chatId;
+  const style = sanitizeStudioStyle(request.style);
+  if (Object.keys(style).length > 0) await updateSettings(chatId, style);
+
+  const store = await books();
+  const activeId = rawSettings(chatId).notebookId;
+  const notebook = activeId ? store.get(activeId) : undefined;
+
+  if (notebook && notebook.chatId === chatId) {
+    const before = store.usedSides(notebook);
+    await writeToNotebook(chatId, request.text);
+    const after = store.usedSides(store.get(notebook.id) as Notebook);
+    return { mode: "notebook", pages: Math.max(0, after - before), notebook: notebook.title };
+  }
+
+  const activeStyle = styleFor(chatId);
+  const fonts = await fontsFor(activeStyle);
+  if (Object.keys(fonts).length === 0) throw new Error("shrift fayllari topilmadi");
+
+  const result = await renderNotebook({ text: request.text, style: activeStyle, fonts });
+  const pages = result.pages.slice(0, MAX_RENDER_PAGES);
+  if (pages.length === 0) throw new Error("varaqa chizilmadi");
+
+  await tg("sendChatAction", { chat_id: chatId, action: "upload_photo" }).catch(() => undefined);
+
+  const notes: string[] = ["🖥 Studio'dan yuborildi."];
+  if (result.pages.length > MAX_RENDER_PAGES) {
+    notes.push(`Faqat birinchi ${MAX_RENDER_PAGES} varaqa yuborildi.`);
+  }
+  if (CYRILLIC_RE.test(request.text) && !fontSupportsCyrillic(activeStyle.font)) {
+    notes.push("Bu shrift kirillcha harflarni bilmaydi — ular zaxira shriftda chizildi.");
+  }
+  for (const warning of result.warnings) notes.push(warning);
+
+  const caption = [
+    `📄 ${PAPER_SHORT[activeStyle.paper]} • ${INK_LABEL[activeStyle.ink]} • ${displayName(activeStyle.font)}`,
+    ...notes,
+  ].join("\n");
+
+  for (let index = 0; index < pages.length; index += 1) {
+    await sendPng(chatId, pages[index].png, {
+      asFile: isFileMode(chatId),
+      filename: `studio-${index + 1}.png`,
+      caption: index === 0 ? caption : undefined,
+      markup: index === 0 ? mainKeyboard() : undefined,
+    });
+  }
+
+  return { mode: "pages", pages: pages.length, notebook: null };
 }
 
 /**
@@ -1423,7 +1688,7 @@ async function writeToNotebook(chatId: number, rawText: string): Promise<void> {
   let remaining = body;
   let written = 0;
   const changed: number[] = [];
-  const fonts = await fontsFor(styleFor(chatId));
+  const fonts = await fontsFor(notebookStyle(chatId, notebook, 0));
 
   while (remaining.length > 0 && written < MAX_SIDES_PER_MESSAGE) {
     const usedSides = store.usedSides(notebook);
@@ -1431,7 +1696,7 @@ async function writeToNotebook(chatId: number, rawText: string): Promise<void> {
     const base = sideIndex >= 0 ? notebook.sides[sideIndex].text : "";
     const candidate = base.length > 0 ? `${base}\n${remaining}` : remaining;
     const fit = await fitToSingleSide(candidate, {
-      style: sideStyle(chatId, Math.max(0, sideIndex)),
+      style: notebookStyle(chatId, notebook, Math.max(0, sideIndex)),
       fonts,
     });
 
@@ -1461,7 +1726,7 @@ async function writeToNotebook(chatId: number, rawText: string): Promise<void> {
 
     // Hech narsa sig'masa ham yozib qo'yamiz (aks holda tsikl takrorlanardi).
     const retry = await fitToSingleSide(remaining, {
-      style: sideStyle(chatId, store.usedSides(notebook) - 1),
+      style: notebookStyle(chatId, notebook, store.usedSides(notebook) - 1),
       fonts,
     });
     const at = await writeToSide(notebook.id, store.usedSides(notebook) - 1, retry.head.length > 0 ? retry.head : remaining);
@@ -1508,8 +1773,12 @@ async function writeAtFlow(chatId: number, notebook: Notebook, text: string, flo
 
   // Betning oxirgi yozuvidan keyin `line`-qatorgacha bo'sh joy qoldirib yozamiz.
   const base = notebook.sides[sideIndex]?.text ?? "";
-  const candidate = appendChunk(base, text, line);
-  const style = sideStyle(chatId, Math.min(sideIndex, Math.max(0, used - 1)));
+  // Mavjud matn chizilgan varaqada nechta qatorni egallagan (o'ralgan
+  // paragraflar ham alohida qator bo'lib sanaladi) — yangi yozuv shundan
+  // boshlab sanaladi, aks holda so'ralgan sondan ko'p qator tashlanadi.
+  const baseLines = base.trim().length > 0 ? (await measureSide(chatId, sideIndex, base)).lines.length : 0;
+  const candidate = appendChunk(base, text, line, baseLines);
+  const style = notebookStyle(chatId, notebook, Math.min(sideIndex, Math.max(0, used - 1)));
   const fit = await fitToSingleSide(candidate, { style, fonts });
   const head = fit.fitsEntirely ? candidate : fit.head;
   let rest = fit.fitsEntirely ? "" : fit.tail.trim();
@@ -1597,16 +1866,32 @@ async function offerNotebooks(chatId: number): Promise<void> {
   await updateSettings(chatId, { menu: "books", booksAction: "write" });
 }
 
-/** Varaq soni tanlangach nom so'raydi (keyingi matn nom bo'ladi). */
-async function askBookName(chatId: number, sheets: NotebookSheets): Promise<void> {
+/** Varaq soni tanlangach daftar qog'ozini so'raydi (keyingi qadam — nom). */
+async function askBookPaper(chatId: number, sheets: NotebookSheets): Promise<void> {
+  await updateSettings(chatId, { pending: { kind: "create", sheets }, menu: "newbook" });
+  await sendMessage(
+    chatId,
+    [
+      `📄 ${sheets} varaqli daftar qanday bo'ladi?`,
+      "",
+      "Qog'oz turini tanlang: yo'l-yo'l (chiziqli), katak yoki oq qog'oz.",
+      "Tanlangan tur daftarda saqlanadi — keyingi yozuvlar ham shu qog'ozda chiziladi.",
+    ].join("\n"),
+    newBookPaperKeyboard(),
+  );
+}
+
+/** Qog'oz turi tanlangach nom so'raydi (keyingi matn nom bo'ladi). */
+async function askBookName(chatId: number, sheets: NotebookSheets, paper: PaperType): Promise<void> {
   const store = await books();
   const suggestion = defaultBookTitle(store.list(chatId));
-  await updateSettings(chatId, { pending: { kind: "create", sheets }, menu: "newbook" });
+  await updateSettings(chatId, { pending: { kind: "create", sheets, paper }, menu: "newbook" });
   await sendMessage(
     chatId,
     [
       `✏️ Daftarga nom bering — keyingi xabaringiz nom bo'ladi (masalan: Matematika 8-sinf).`,
       "",
+      `📄 Qog'oz: ${PAPER_LABEL[paper]}`,
       `Nom kerak bo'lmasa ${L.skipName} tugmasini bosing: «${suggestion}» nomi bilan yaratiladi.`,
     ].join("\n"),
     reply([[L.skipName], [L.backBooks]]),
@@ -1614,16 +1899,21 @@ async function askBookName(chatId: number, sheets: NotebookSheets): Promise<void
 }
 
 /** Yangi daftar yaratadi va uni ochadi (nom berilmasa — standart nom). */
-async function createNotebook(chatId: number, sheets: NotebookSheets, title?: string): Promise<void> {
+async function createNotebook(
+  chatId: number,
+  sheets: NotebookSheets,
+  paper: PaperType,
+  title?: string,
+): Promise<void> {
   const store = await books();
   const list = store.list(chatId);
   const wanted = (title ? cleanTitle(title) : null) ?? defaultBookTitle(list);
-  const notebook = await store.create({ chatId, sheets, title: uniqueTitle(list, wanted) });
+  const notebook = await store.create({ chatId, sheets, paper, title: uniqueTitle(list, wanted) });
   await updateSettings(chatId, { notebookId: notebook.id, menu: "main" });
   await sendMessage(
     chatId,
     [
-      `✅ «${notebook.title}» yaratildi — ${sheets} varaq (${sheets * 2} bet).`,
+      `✅ «${notebook.title}» yaratildi — ${sheets} varaq (${sheets * 2} bet), ${PAPER_LABEL[notebook.paper]}.`,
       "",
       "Endi matn yuboring: men uni varaq tomonlariga ketma-ket yozib boraman.",
       "Old tomonida chegara chapda, orqa tomonida — o'ngda (xuddi daftar kabi).",
@@ -1686,7 +1976,8 @@ async function sendNotebookBook(chatId: number, notebook: Notebook): Promise<voi
     return;
   }
 
-  const style = styleFor(chatId);
+  // Kitob ham daftarning o'z qog'ozida chiziladi (yaratishda tanlangan tur).
+  const style: NotebookStyle = { ...styleFor(chatId), paper: notebook.paper };
   const fonts = await fontsFor(style);
   if (Object.keys(fonts).length === 0) {
     await sendMessage(chatId, "Kechirasiz, shrift fayllari topilmadi — botni qayta ishga tushirish kerak. 🙏");
@@ -1788,7 +2079,8 @@ function writeKeyboard(chatId: number): TgMarkup {
   }
   if (flow.stage === "skip") {
     return reply([
-      ["⏭ 0", "⏭ 1", "⏭ 2"],
+      [L.writeUnder],
+      ["⏭ 1", "⏭ 2"],
       ["⏭ 3", "⏭ 5"],
       [L.deleteCancel],
     ]);
@@ -1848,8 +2140,10 @@ async function askSkipLines(chatId: number): Promise<void> {
     [
       "⏭ Nechta qator tashlab ketamiz?",
       "",
-      `Yozish ${flow.line ?? 1}-qatordan boshlanadi. Agar avval bir nechta qator bo'sh`,
-      "qolishini xohlasangiz, sonni tanlang (masalan ⏭ 2 — ikki qator tashlanadi).",
+      `Yozish ${flow.line ?? 1}-qatordan boshlanadi (tepadan sanaganda).`,
+      "",
+      `${L.writeUnder} — oldingi yozuvning tagidan, bo'sh qator qoldirmasdan.`,
+      "⏭ 1, ⏭ 2 … — shuncha qator bo'sh qoladi (⏭ 1 — bitta qator tashlanadi).",
     ].join("\n"),
     writeKeyboard(chatId),
   );
@@ -2408,6 +2702,12 @@ async function handleEditFlowLabel(chatId: number, label: string): Promise<boole
     }
 
     if (flow.stage === "skip") {
+      // «⬇️ Yozuvning tagidan» — 0 qator tashlanadi: yangi yozuv oxirgi
+      // yozilgan qatorning tagidan boshlanadi.
+      if (un === L.writeUnder) {
+        await finishWritePosition(chatId);
+        return true;
+      }
       const skipMatch = /^(?:⏭\s*)?(\d+)$/.exec(un);
       if (skipMatch) {
         const skip = Number.parseInt(skipMatch[1], 10);
@@ -2784,7 +3084,7 @@ async function handleMenuLabelInner(chatId: number, label: string): Promise<bool
     const pending = rawSettings(chatId).pending;
     if (pending?.kind === "create") {
       await updateSettings(chatId, { pending: undefined });
-      await createNotebook(chatId, pending.sheets);
+      await createNotebook(chatId, pending.sheets, pending.paper ?? DEFAULT_STYLE.paper);
     } else if (pending?.kind === "styleName") {
       await updateSettings(chatId, { pending: undefined });
       await saveStyle(chatId);
@@ -2925,10 +3225,18 @@ async function handleMenuLabelInner(chatId: number, label: string): Promise<bool
     return true;
   }
 
-  // 3. Varaq soni tanlash (yangi daftar) — keyin nom so'raladi.
+  // 3. Varaq soni tanlash (yangi daftar) — keyin qog'oz turi so'raladi.
   const sheetChoice = SHEET_BUTTONS.find((option) => option.text === unmark(label));
   if (sheetChoice) {
-    await askBookName(chatId, sheetChoice.sheets);
+    await askBookPaper(chatId, sheetChoice.sheets);
+    return true;
+  }
+
+  // 3b. Qog'oz turi tanlash (yangi daftar) — keyin nom so'raladi.
+  const paperChoice = NEWBOOK_PAPERS.find((option) => option.text === unmark(label));
+  const pendingCreate = rawSettings(chatId).pending;
+  if (paperChoice && pendingCreate?.kind === "create") {
+    await askBookName(chatId, pendingCreate.sheets, paperChoice.paper);
     return true;
   }
 
@@ -3051,7 +3359,8 @@ async function handlePendingText(chatId: number, text: string): Promise<boolean>
 
   await updateSettings(chatId, { pending: undefined });
   if (pending.kind === "create") {
-    await createNotebook(chatId, pending.sheets, text);
+    // Qog'oz turi tanlanmagan bo'lsa (eski holat) — standart qog'oz olinadi.
+    await createNotebook(chatId, pending.sheets, pending.paper ?? DEFAULT_STYLE.paper, text);
     return true;
   }
 
@@ -3092,6 +3401,11 @@ async function handleCommand(chatId: number, text: string): Promise<void> {
 
   if (command === "/id") {
     await sendMessage(chatId, `Chat ID: ${chatId}`, mainKeyboard());
+    return;
+  }
+
+  if (command === "/studio" || command === "/app") {
+    await sendMessage(chatId, studioText(), studioMarkup() ?? mainKeyboard());
     return;
   }
 
@@ -3287,13 +3601,48 @@ async function startPolling(): Promise<void> {
   }
 }
 
-async function startWebhook(baseUrl: string): Promise<void> {
+/**
+ * Botning kichik HTTP serveri.
+ *
+ * Yo'llar:
+ *   POST /telegram/webhook — faqat webhook rejimida (Telegram update'lari);
+ *   POST /mini-app/send    — Studio (Mini App) natijasini chatga yuborish;
+ *   GET  /healthz          — server tirikligini tekshirish.
+ *
+ * Mini App uchun webhook shart emas: `MINI_APP_URL` o'rnatilgan bo'lsa, server
+ * long polling rejimida ham ishga tushadi (nginx `/mini-app/` ni shu portga
+ * proxy qiladi).
+ */
+async function startHttpServer(options: { webhookBaseUrl?: string } = {}): Promise<void> {
   const port = Number(process.env.PORT ?? 8080);
-  const url = `${baseUrl.replace(/\/+$/, "")}${WEBHOOK_PATH}`;
   const secret = process.env.BOT_SECRET?.trim();
+  const baseUrl = options.webhookBaseUrl;
+  const appUrl = miniAppUrl();
+
+  const allowedOrigins = [
+    ...MINI_APP_EXTRA_ORIGINS,
+    ...(appUrl ? [originFromUrl(appUrl)].filter((origin): origin is string => Boolean(origin)) : []),
+  ];
+  const handleMiniApp = createMiniAppHandler({
+    token: process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "",
+    allowedOrigins,
+    send: sendMiniAppText,
+  });
 
   const server = createServer((request, response) => {
-    if (request.method !== "POST" || !request.url?.startsWith(WEBHOOK_PATH)) {
+    const path = (request.url ?? "").split("?")[0];
+
+    if (request.method === "GET" && path === HEALTH_PATH) {
+      response.writeHead(200, { "content-type": "text/plain; charset=utf-8" }).end("ok");
+      return;
+    }
+
+    if (path === MINI_APP_PATH) {
+      void handleMiniApp(request, response);
+      return;
+    }
+
+    if (!baseUrl || request.method !== "POST" || !path.startsWith(WEBHOOK_PATH)) {
       response.writeHead(404).end("not found");
       return;
     }
@@ -3322,14 +3671,38 @@ async function startWebhook(baseUrl: string): Promise<void> {
   });
 
   await new Promise<void>((done) => server.listen(port, "0.0.0.0", done));
-  console.log(`🌐 Webhook server 0.0.0.0:${port}${WEBHOOK_PATH} da tinglayapti.`);
+  const routes = [HEALTH_PATH, ...(appUrl ? [MINI_APP_PATH] : []), ...(baseUrl ? [WEBHOOK_PATH] : [])];
+  console.log(`🌐 HTTP server 0.0.0.0:${port} da tinglayapti (${routes.join(", ")}).`);
 
-  await tg("setWebhook", {
-    url,
-    allowed_updates: ALLOWED_UPDATES,
-    ...(secret ? { secret_token: secret } : {}),
-  });
-  console.log(`✅ Webhook ro'yxatga olindi: ${url}`);
+  if (baseUrl) {
+    const url = `${baseUrl.replace(/\/+$/, "")}${WEBHOOK_PATH}`;
+    await tg("setWebhook", {
+      url,
+      allowed_updates: ALLOWED_UPDATES,
+      ...(secret ? { secret_token: secret } : {}),
+    });
+    console.log(`✅ Webhook ro'yxatga olindi: ${url}`);
+  }
+  if (appUrl) console.log(`🖥 Mini App manzili: ${appUrl}`);
+}
+
+/**
+ * Chat menyusidagi tugmani (matn maydoni yonidagi) Studio Mini App'ga bog'laydi.
+ *
+ * `MINI_APP_URL` bo'lmasa hech narsa qilmaymiz — foydalanuvchi qo'lda qo'ygan
+ * menyu tugmasi o'chirilib qolmasligi uchun.
+ */
+async function configureMenuButton(): Promise<void> {
+  const url = miniAppUrl();
+  if (!url) return;
+  try {
+    await tg("setChatMenuButton", {
+      menu_button: { type: "web_app", text: "Studio", web_app: { url } },
+    });
+    console.log("🖥 Chat menyusidagi tugma Studio Mini App'ga bog'landi.");
+  } catch (error) {
+    console.warn("setChatMenuButton bajarilmadi:", (error as Error).message);
+  }
 }
 
 async function printInfo(): Promise<void> {
@@ -3353,6 +3726,13 @@ async function printInfo(): Promise<void> {
   console.log(`   url       : ${hook.url || "(yo'q — long polling ishlatiladi)"}`);
   console.log(`   kutilayotgan update: ${hook.pending_update_count ?? 0}`);
   if (hook.last_error_message) console.log(`   oxirgi xato: ${hook.last_error_message}`);
+  console.log("🖥 Mini App (Studio):");
+  console.log(`   manzil    : ${miniAppUrl() ?? "(yo'q — MINI_APP_URL o'rnatilmagan)"}`);
+  console.log(
+    miniAppUrl()
+      ? `   endpoint  : POST ${MINI_APP_PATH} • GET ${HEALTH_PATH} (0.0.0.0:${Number(process.env.PORT ?? 8080)})`
+      : "   holat     : Mini App tugmalari qo'shilmagan (polling/webhook baribir ishlaydi)",
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -3403,10 +3783,14 @@ async function main(): Promise<void> {
       );
       process.exit(1);
     }
-    await startWebhook(baseUrl);
+    await configureMenuButton();
+    await startHttpServer({ webhookBaseUrl: baseUrl });
     return;
   }
 
+  // Long polling: Studio (Mini App) sozlangan bo'lsa, HTTP endpoint ham kerak.
+  await configureMenuButton();
+  if (miniAppUrl()) await startHttpServer();
   await startPolling();
 }
 

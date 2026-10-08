@@ -4,10 +4,14 @@
  *
  * Daftar bazasi — har bir chat uchun "daftar" (notebook) yozuvlari.
  *
- * Foydalanuvchi yangi daftar yaratadi (12/36/48/96 varaq), keyin yozgan
- * matni varaq tomonlariga ketma-ket joylashadi. Har bir varaq ikki tomondan
- * iborat: juft indeks — old tomon (chegara chapda), toq indeks — orqa tomon
- * (chegara o'ngda).
+ * Foydalanuvchi yangi daftar yaratadi (12/36/48/96 varaq) va qog'oz turini
+ * tanlaydi (yo'l-yo'l / katak / oq varaq), keyin yozgan matni varaq tomonlariga
+ * ketma-ket joylashadi. Har bir varaq ikki tomondan iborat: juft indeks — old
+ * tomon (chegara chapda), toq indeks — orqa tomon (chegara o'ngda).
+ *
+ * Qog'oz turi daftarning o'zida (`paper`) saqlanadi: bir chatda yo'l-yo'l va
+ * katak daftar birga turishi mumkin, shuning uchun chat sozlamasidagi qog'oz
+ * daftar ichida ishlatilmaydi.
  *
  * Ma'lumot `${dataDir}/notebooks.json` faylida saqlanadi. Yozish atomar:
  * avval vaqtinchalik faylga yoziladi, keyin nomi almashtiriladi — shu tufayli
@@ -15,12 +19,18 @@
  */
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { FontId, PersonalStyle } from "../src/lib/handwriting/types";
+import type { FontId, PaperType, PersonalStyle } from "../src/lib/handwriting/types";
 
 export type NotebookSheets = 12 | 36 | 48 | 96;
 
 /** Yangi daftar yaratishda taklif qilinadigan varaq sonlari. */
 export const SHEET_CHOICES: NotebookSheets[] = [12, 36, 48, 96];
+
+/**
+ * Daftarda saqlanadigan qog'oz turlari (yaratishda tanlanadi).
+ * Fayldagi eski daftarlarda `paper` bo'lmasa yoki noma'lum bo'lsa — `lined`.
+ */
+export const PAPER_CHOICES: PaperType[] = ["lined", "grid", "plain"];
 
 export interface NotebookSide {
   text: string;
@@ -48,12 +58,25 @@ export interface Notebook {
   chatId: number;
   /** Daftardagi varaq soni (har bir varaq = 2 tomon). */
   sheets: NotebookSheets;
+  /**
+   * Daftar qog'ozi: yo'l-yo'l (`lined`), katak (`grid`) yoki oq varaq (`plain`).
+   * Yaratishda tanlanadi va shu daftarda saqlanadi.
+   */
+  paper: PaperType;
   title: string;
   createdAt: number;
   /** index i: juft — old tomon (recto), toq — orqa tomon (verso). */
   sides: NotebookSide[];
   /** Tahrir tarixi (orqaga qaytarish uchun), eng yangisi oxirida. */
   history?: NotebookEdit[];
+}
+
+/** Yangi daftar yaratish uchun kirish (`paper` berilmasa — yo'l-yo'l qog'oz). */
+export interface NotebookCreateInput {
+  chatId: number;
+  sheets: NotebookSheets;
+  paper?: PaperType;
+  title?: string;
 }
 
 export interface NotebookStore {
@@ -78,7 +101,7 @@ export interface NotebookStore {
   undo(id: string): Promise<NotebookEdit | null>;
   /** Oxirgi amal tavsifi (tugma izohi uchun). */
   lastEdit(id: string): NotebookEdit | undefined;
-  create(input: { chatId: number; sheets: NotebookSheets; title?: string }): Promise<Notebook>;
+  create(input: NotebookCreateInput): Promise<Notebook>;
   /** Daftar nomini almashtiradi (bo'sh nom rad etiladi). */
   rename(id: string, title: string): Promise<boolean>;
   /** Ochiq daftar — faqat xotirada saqlanadi (faylga yozilmaydi). */
@@ -149,6 +172,8 @@ function sanitizeNotebook(value: unknown): Notebook | null {
     id: raw.id,
     chatId: raw.chatId,
     sheets: raw.sheets as NotebookSheets,
+    // Qog'oz turi keyinroq qo'shildi: eski yozuvlarda yo'q — yo'l-yo'l olamiz.
+    paper: PAPER_CHOICES.includes(raw.paper as PaperType) ? (raw.paper as PaperType) : "lined",
     title: typeof raw.title === "string" && raw.title.trim() ? raw.title : "daftar",
     createdAt: typeof raw.createdAt === "number" && Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
     // Varaq sonidan ortiq tomon bo'lsa (fayl qo'lda tahrirlangan bo'lishi mumkin) — kesamiz.
@@ -328,12 +353,13 @@ export async function createStore(dataDir: string): Promise<NotebookStore> {
       return history[history.length - 1];
     },
 
-    async create(input: { chatId: number; sheets: NotebookSheets; title?: string }): Promise<Notebook> {
+    async create(input: NotebookCreateInput): Promise<Notebook> {
       const existing = Array.from(notebooks.values()).filter((notebook) => notebook.chatId === input.chatId);
       const notebook: Notebook = {
         id: nextId(),
         chatId: input.chatId,
         sheets: input.sheets,
+        paper: input.paper ?? "lined",
         title: (input.title ? cleanTitle(input.title) : null) ?? `${existing.length + 1}-daftar`,
         createdAt: Date.now(),
         sides: [],

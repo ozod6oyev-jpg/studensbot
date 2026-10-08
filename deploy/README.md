@@ -112,9 +112,15 @@ Bot pastdagi **doimiy menyu** bilan ishlaydi (tugmalar chat ichida emas):
 ✍️ Matn kiritish   ⚙️ Sozlamalar
 ```
 
+`MINI_APP_URL` sozlangan bo'lsa, shu menyuga yana `🖥 Studio (Mini App)` tugmasi
+qo'shiladi (quyidagi "Telegram Mini App" bo'limiga qarang).
+
 - `➕ Yangi daftar` → varaq soni tanlanadi: 12 / 36 / 48 / 96 (har varaqning ikki tomoni bor —
-  jami 24/72/96/192 bet), keyin bot daftar nomini so'raydi — matn yuborsangiz shu nom, `⏭ Nomsiz
-  qoldirish` bosilsa standart nom (`1-daftar`, keyingisi `2-daftar`) qo'yiladi;
+  jami 24/72/96/192 bet), keyin qog'oz turi: `📏 Yo'l-yo'l daftar` / `🔲 Katak daftar` /
+  `📄 Oq qog'oz` — tanlov daftarda saqlanadi, shuning uchun shu daftarning betlari va PDF kitobi
+  o'sha qog'ozda chiziladi (bir chatda turli qog'ozli daftarlar bo'lishi mumkin); so'ng bot daftar
+  nomini so'raydi — matn yuborsangiz shu nom, `⏭ Nomsiz qoldirish` bosilsa standart nom
+  (`1-daftar`, keyingisi `2-daftar`) qo'yiladi;
 - `✍️ Matn kiritish` → daftarlar ro'yxati chiqadi; daftar hali bo'lmasa, avval yangi daftar
   yaratish kerakligi aytiladi;
 - `📚 Daftarlar` ichida `📖 <nom> • 5/24` tugmasi bosilsa daftar kartasi ochiladi:
@@ -122,8 +128,8 @@ Bot pastdagi **doimiy menyu** bilan ishlaydi (tugmalar chat ichida emas):
   `⬅️ Daftarlar`;
 - `✍️ Shu daftarga yozish` avval qayerga yozilganini (oxirgi bet va qator) hamda betdagi bo'sh
   qatorlarni aytadi; `▶️ Davom etish`, `➕ Yangi betdan` yoki `🔢 Qatorni tanlash` bilan joy
-  tanlanadi, keyin nechta qator tashlab ketish so'raladi (`⏭ 0`, `⏭ 1`, `⏭ 2`, …) va matn aynan
-  shu qatordan boshlab yoziladi;
+  tanlanadi, keyin nechta qator tashlab ketish so'raladi (`⬇️ Yozuvning tagidan` — 0 qator,
+  `⏭ 1`, `⏭ 2`, …) va matn aynan shu qatordan boshlab yoziladi;
 - `🛠 Tahrirlash` → `✂️ Yozuvni o'chirish`: yozilgan betlar slayd qilinadi, bet → qator → so'z
   tanlanadi (boshlanish va tugash joyi), tasdiqlangach o'sha oraliqdagi so'zlar o'chiriladi va
   tahrirlangan betlar qayta yuboriladi;
@@ -311,6 +317,183 @@ qatorini domeningizga o'zgartiring.
 
 > Yangi versiyadan keyin `dist/` ni qayta yig'ishni unutmang: `sudo -u daftar /usr/local/bin/bun run build`.
 
+## Telegram Mini App (Studio'ni chat ichida ochish)
+
+Studio sahifasini Telegram ichida **Mini App** sifatida ochish mumkin: bot menyusidagi
+tugma bosilsa sahifa Telegram oynasida ochiladi, matn va sozlamalar `initData` bilan
+botga yuboriladi, bot esa natijani o'sha chatga rasm qilib qaytaradi.
+
+Talablar:
+
+- **domen va HTTPS** — Telegram faqat `https://` manzilni qabul qiladi, ya'ni sertifikat
+  (certbot) shart. Faqat IP manzilli serverda Mini App umuman ochilmaydi; polling rejimi
+  va brauzerdagi Studio esa avvalgidek ishlayveradi;
+- bot jarayoni (`daftar-bot` xizmati) **ishlab turishi** kerak — Mini App endpointini
+  o'sha ochadi.
+
+Mini App sozlanganda bot `setChatMenuButton` bilan Telegram'ning **menyu tugmasini**
+(matn yoziladigan qator yonidagi tugma) Studio'ga bog'laydi va pastdagi menyuga
+`🖥 Studio (Mini App)` tugmasini qo'shadi; `/studio` buyrug'i ham shu sahifani ochadigan
+tugma yuboradi. Webhook rejimi bunga shart emas: Mini App endpointi long polling
+rejimida ham `PORT` (standart `8080`) portida ko'tariladi.
+
+### 1. Domen, sayt va HTTPS (bitta domen yetadi)
+
+Domenni serverga yo'naltiring, so'ng saytni yig'ing:
+
+```bash
+sudo apt-get install -y nginx certbot python3-certbot-nginx
+cd /opt/daftar-bot
+sudo -u daftar /usr/local/bin/bun run build     # dist/ papkasi hosil bo'ladi
+```
+
+Nginx bir vaqtning o'zida ham saytni, ham botning Mini App endpointini ko'rsatadi
+(`/etc/nginx/sites-available/daftar`):
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name domen.uz;
+
+    root /opt/daftar-bot/dist;
+    index index.html;
+
+    # Studio sahifasi (Mini App ham shu yerdan ochiladi)
+    location / { try_files $uri $uri/ /index.html; }
+
+    # Mini App: natijani chatga qaytaradigan bot endpointi
+    location /mini-app/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Faqat webhook rejimida ishlatilsa kerak bo'ladi
+    location /telegram/webhook {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location ~* \.(ttf|woff2?|js|css|png|svg)$ {
+        expires 30d;
+        access_log off;
+    }
+}
+```
+
+`domen.uz` o'rniga o'z domeningizni yozing, keyin:
+
+```bash
+sudo ln -sf /etc/nginx/sites-available/daftar /etc/nginx/sites-enabled/daftar
+sudo rm -f /etc/nginx/sites-enabled/default   # 80-portda ikkita default_server bo'lmasin
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d domen.uz              # HTTPS sertifikati (Mini App uchun shart)
+```
+
+### 2. Botga Mini App manzilini berish
+
+```bash
+sudo nano /opt/daftar-bot/.env
+```
+
+Qatorni qo'shing (manzil `https://` bo'lishi shart):
+
+```ini
+MINI_APP_URL=https://domen.uz/studio
+```
+
+```bash
+sudo systemctl restart daftar-bot
+```
+
+Shundan keyin bot:
+
+- `PORT` (standart `8080`) portida Mini App serverini ochadi — `POST /mini-app/send`
+  so'rovlarini qabul qiladi (`GET /healthz` → `ok`);
+- Telegram'ning menyu tugmasini Studio'ga bog'laydi va pastdagi menyuga
+  `🖥 Studio (Mini App)` tugmasini qo'shadi.
+
+Tekshirish:
+
+```bash
+curl -s http://127.0.0.1:8080/healthz        # ok
+journalctl -u daftar-bot -n 30               # Mini App haqidagi xabarlar
+sudo -u daftar /usr/local/bin/bun run /opt/daftar-bot/bot/index.ts info
+```
+
+Telegram'da botni ochib, menyu tugmasini bosing: Studio oynasi ochiladi, matn yozib
+natijani chatga yuborish mumkin. Sahifa `initData` ni (Telegram imzosini) botga
+yuboradi, bot uni `TELEGRAM_BOT_TOKEN` bilan tekshiradi — imzo noto'g'ri yoki ma'lumot
+24 soatdan eski bo'lsa, so'rov rad etiladi.
+
+> Mini App ochilmayapti yoki natija chatga kelmayapti? Avval `curl -s
+> http://127.0.0.1:8080/healthz` ni sinab ko'ring: javob `ok` bo'lmasa xizmat ishlamayapti
+> yoki `PORT` boshqa, `ok` bo'lsa — domen/HTTPS yoki nginx sozlamasida muammo bor
+> (quyidagi "Muammolar" jadvali).
+
+### 3. Domeningiz bo'lmasa — bepul HTTPS manzil
+
+Mini App uchun domen shart emas, faqat **HTTPS** shart. Ikki ishlaydigan yo'l bor.
+
+**a) `sslip.io` / `nip.io` + certbot (bepul va doimiy).** Bu xizmatlar `<IP>.sslip.io`
+ko'rinishidagi nomni o'sha IP manzilga yo'naltiradi, shuning uchun Let's Encrypt sertifikatini
+haqiqiy nom uchun olish mumkin. Serveringiz IP'si `95.123.45.67` bo'lsa:
+
+```bash
+sudo nano /etc/nginx/sites-available/daftar   # server_name 95.123.45.67.sslip.io;
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d 95.123.45.67.sslip.io # bepul HTTPS sertifikati
+```
+
+So'ng `.env` faylida manzilni yangilang va xizmatni qayta ishga tushiring:
+
+```ini
+MINI_APP_URL=https://95.123.45.67.sslip.io/studio
+```
+
+```bash
+sudo systemctl restart daftar-bot
+```
+
+80 va 443 portlari ochiq, IP esa doimiy (statik) bo'lishi kerak. IP o'zgarsa manzil ham
+o'zgaradi — yangisini `MINI_APP_URL` ga yozib, xizmatni qayta ishga tushirish kifoya
+(@BotFather'da hech narsa o'zgartirilmaydi).
+
+**b) Cloudflare Tunnel (tez, vaqtinchalik manzil).** Serverda `cloudflared` ni o'rnatib, saytni
+ochiq nginx orqali tunnelga ulasak, `https://<tasodifiy>.trycloudflare.com` manzili hosil
+bo'ladi:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:80   # sayt (nginx) + /mini-app/ proxy
+```
+
+```ini
+MINI_APP_URL=https://<tasodifiy>.trycloudflare.com/studio
+```
+
+Vaqtinchalik manzil har ishga tushirishda o'zgaradi, shuning uchun `MINI_APP_URL` ni ham
+yangilab, `daftar-bot` ni qayta ishga tushirish kerak bo'ladi. Doimiy ishlatish uchun
+`cloudflared tunnel create` bilan **nomlangan** tunnel va o'z domeningiz kerak.
+
+> **Muhim:** manzil majburiy `https://` bo'lishi kerak. `http://<IP>/studio` yoki
+> `http://localhost:5173` bilan Telegram `web_app` tugmasini umuman ochmaydi. Bunday holatda
+> Studio'ni faqat oddiy brauzerda ishlatish mumkin (chatga yuborish tugmasi ko'rinmaydi), bot esa
+> ishga tushganda `⚠️  MINI_APP_URL HTTPS bo'lishi kerak …` deb ogohlantiradi.
+
+### 4. API boshqa domenda bo'lsa (ixtiyoriy)
+
+Sayt va bot turli domenda tursa, API manzilini yig'ishdan oldin bering:
+
+```bash
+cd /opt/daftar-bot
+sudo -u daftar env VITE_MINI_APP_ENDPOINT=https://bot.domen.uz/mini-app/send /usr/local/bin/bun run build
+```
+
+Bunday holatda botning CORS tekshiruvi `MINI_APP_URL` domeniga ruxsat beradi — ya'ni
+`MINI_APP_URL` sayt turgan domen bo'lishi kerak.
+
 ## Muammolar
 
 | Alomat | Yechim |
@@ -325,6 +508,9 @@ qatorini domeningizga o'zgartiring.
 | Sozlamalar yoki daftarlar saqlanmayapti | `/var/lib/daftar-bot` papkasi `daftar` foydalanuvchisiga tegishli bo'lishi kerak (`settings.json`, `notebooks.json`, `styles.json`) |
 | Rasm chiqmayapti | Matn yuborilganini va ochiq daftar borligini tekshiring: matn faqat tanlangan daftarga yoziladi, daftar bo'lmasa bot yangisini yaratishni aytadi |
 | Webhook ishlamayapti | Domen HTTPS bo'lishi va `/telegram/webhook` yo'li proxy qilingan bo'lishi shart |
+| Mini App tugmasi bosilsa sahifa ochilmayapti ("URL'ni ochib bo'lmadi") | Domen HTTPS emas, `MINI_APP_URL` xato yozilgan yoki nginx'da `/mini-app/` (va sayt `dist/`) proxy qilinmagan. HTTPS sertifikatini tekshiring: `sudo certbot certificates`, so'ng `nginx -t && sudo systemctl reload nginx` |
+| Mini App'da "Telegram ma'lumotlari eskirgan" chiqadi | `initData` 24 soatdan eski — Mini App'ni yopib, bot menyusidagi tugma orqali qaytadan oching |
+| Mini App'da "Bot serveriga ulanib bo'lmadi" yoki "Yuborilmadi (HTTP 500)" | Bot jarayoni ishlamayapti yoki `PORT`da tinglamayapti: `systemctl status daftar-bot`, `journalctl -u daftar-bot -n 50`, `curl -s http://127.0.0.1:8080/healthz` |
 
 ## Xavfsizlik
 

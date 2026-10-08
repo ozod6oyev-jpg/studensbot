@@ -398,12 +398,28 @@ async function main(): Promise<void> {
       `yangi daftar yaratish tugmalari ko'rsatildi (${createKeys.join(", ")})`,
     );
 
-    console.log("\n=== 3-holat: daftar yaratish — nom so'rash va standart nom ===");
+    console.log("\n=== 3-holat: daftar yaratish — qog'oz turi, nom so'rash va standart nom ===");
     send("12 varaq");
+    const paperPromptOf = (): ReceivedText | undefined =>
+      mock.texts.filter((entry) => entry.text.includes("varaqli daftar qanday bo'ladi?")).pop();
+    await waitFor(() => Boolean(paperPromptOf()), 15000, "qog'oz turi so'rovi");
+    const bookPaperKeys = keyboardLabels(paperPromptOf()?.markup ?? "");
+    assert(
+      ["📏 Yo'l-yo'l daftar", "🔲 Katak daftar", "📄 Oq qog'oz"].every((label) =>
+        bookPaperKeys.includes(label),
+      ),
+      `varaq soni tanlangach qog'oz turi so'raladi (${bookPaperKeys.join(", ")})`,
+    );
+    // Katak daftar tanlaymiz: tanlov daftarda saqlanishi quyida tekshiriladi.
+    send("🔲 Katak daftar");
     const namePromptOf = (): ReceivedText | undefined =>
       mock.texts.filter((entry) => entry.text.includes("Daftarga nom bering")).pop();
     await waitFor(() => Boolean(namePromptOf()), 15000, "nom so'rovi");
-    assert(Boolean(namePromptOf()), "varaq soni tanlangach nom so'raladi");
+    assert(Boolean(namePromptOf()), "qog'oz turi tanlangach nom so'raladi");
+    assert(
+      (namePromptOf()?.text ?? "").includes("katak daftar"),
+      "nom so'rashda tanlangan qog'oz ko'rsatildi",
+    );
     assert(
       keyboardLabels(namePromptOf()?.markup ?? "").includes("⏭ Nomsiz qoldirish"),
       "nomsiz qoldirish tugmasi berildi",
@@ -419,9 +435,19 @@ async function main(): Promise<void> {
       `daftar standart nom bilan yaratildi: "${created?.text.split("\n")[0]}"`,
     );
     assert(
+      (created?.text ?? "").includes("katak daftar"),
+      `tanlangan qog'oz yaratish xabarida ko'rsatildi: "${created?.text.split("\n")[0]}"`,
+    );
+    assert(
       keyboardLabels(created?.markup ?? "").includes(BTN.settings),
       "yaratishdan keyin asosiy menyu qaytdi",
     );
+    // Tanlov daftarning o'zida saqlanishi kerak (`paper: grid`).
+    const createdBooks = JSON.parse(await readFile(join(dataDir, "notebooks.json"), "utf8")) as {
+      notebooks?: { title?: string; paper?: string }[];
+    };
+    const storedPaper = createdBooks.notebooks?.[0]?.paper;
+    assert(storedPaper === "grid", `tanlangan qog'oz daftarda saqlandi (paper: ${storedPaper})`);
 
     console.log("\n=== 4-holat: matn varaqqa yozilishi (old tomon) ===");
     send("Salom! x^2 + \\frac{1}{2} = 0");
@@ -432,6 +458,10 @@ async function main(): Promise<void> {
     assert(size.width === 1240 && size.height === 1754, `varaq A4 o'lchamda (${size.width}x${size.height})`);
     assert(firstPage.caption.includes("varaq"), `izohda varaq raqami bor: "${firstPage.caption.split("\n")[0]}"`);
     assert(firstPage.caption.includes("old tomoni"), "birinchi bet — old tomoni deb belgilandi");
+    assert(
+      firstPage.caption.includes("Katak"),
+      `bet daftarning o'z qog'ozida chizildi: "${firstPage.caption.split("\n")[1] ?? ""}"`,
+    );
     assert(
       firstPage.markup.includes('"keyboard"'),
       "rasm ostida ham pastdagi menyu yuborildi",
@@ -701,6 +731,12 @@ async function main(): Promise<void> {
     send(BTN.newBook);
     await waitFor(() => mock.texts.some((entry) => entry.text.includes("varaq sonini tanlang")), 15000, "varaq tanlash");
     send("12 varaq");
+    await waitFor(
+      () => mock.texts.filter((entry) => entry.text.includes("varaqli daftar qanday bo'ladi?")).length > 0,
+      15000,
+      "qog'oz turi so'rovi (yangi daftar)",
+    );
+    send("🔲 Katak daftar");
     await waitFor(
       () => mock.texts.filter((entry) => entry.text.includes("Daftarga nom bering")).length > 0,
       15000,
@@ -990,6 +1026,22 @@ async function main(): Promise<void> {
     );
 
     console.log("\n=== 28-holat: tanlangan qatordan yozish va yozuvni orqaga qaytarish ===");
+    /** Barcha betlar matni: yozuv qaysi betga tushganini aniqlash uchun. */
+    const readSideTexts = async (): Promise<Map<string, string>> => {
+      const parsed: unknown = JSON.parse(await readFile(join(dataDir, "notebooks.json"), "utf8"));
+      const list = Array.isArray(parsed)
+        ? parsed
+        : ((parsed as { notebooks?: unknown[] })?.notebooks ?? []);
+      const map = new Map<string, string>();
+      for (const item of list) {
+        const notebook = item as { id?: string; sides?: { text?: string }[] };
+        (notebook.sides ?? []).forEach((side, index) =>
+          map.set(`${notebook.id ?? "?"}#${index}`, side.text ?? ""),
+        );
+      }
+      return map;
+    };
+    const sidesBeforeFlow = await readSideTexts();
     const photosBeforeFlowWrite = mock.photos.length;
     const flowWrittenCount = (): number => countTexts("daftariga yozildi");
     const beforeFlowWrite = flowWrittenCount();
@@ -1006,6 +1058,25 @@ async function main(): Promise<void> {
     assert(
       keyboardLabels(flowWritten?.markup ?? "").includes("↩️ Yozuvni orqaga qaytarish"),
       "yozuvni orqaga qaytarish tugmasi berildi",
+    );
+
+    // «⏭ 1» tanlangani uchun orada aynan 1 qator bo'sh qolishi kerak: betga
+    // qo'shilgan qism «\n\n» bilan boshlanadi (bitta qator uzilishi + bitta
+    // bo'sh qator). Ilgari bu yerda o'ralgan paragraf hisobiga 2-3 qator
+    // tashlanib ketardi.
+    const sidesAfterFlow = await readSideTexts();
+    const changedSides = Array.from(sidesAfterFlow.keys()).filter(
+      (key) => (sidesAfterFlow.get(key) ?? "") !== (sidesBeforeFlow.get(key) ?? ""),
+    );
+    assert(changedSides.length === 1, `yozuv bitta betga tushdi (o'zgargan betlar: ${changedSides.length})`);
+    const changedKey = changedSides[0] ?? "";
+    const beforeSideText = sidesBeforeFlow.get(changedKey) ?? "";
+    const afterSideText = sidesAfterFlow.get(changedKey) ?? "";
+    const addedText = afterSideText.slice(beforeSideText.length);
+    assert(
+      afterSideText.startsWith(beforeSideText) &&
+        addedText === "\n\nTanlangan qatordan boshlanadigan yangi yozuv.",
+      `«⏭ 1» bilan aynan 1 qator tashlandi (qo'shilgan matn: ${JSON.stringify(addedText)})`,
     );
 
     const undoCount = (): number => countTexts("amali orqaga qaytarildi");
@@ -1152,8 +1223,14 @@ async function main(): Promise<void> {
     const beforeContinueSkip = skipPromptCount();
     send("▶️ Davom etish");
     await waitFor(() => skipPromptCount() > beforeContinueSkip, 20000, "davom etishda qator tashlash so'rovi");
+    const continueSkipPrompt = mock.texts.filter((entry) => entry.text.includes("Nechta qator tashlab ketamiz")).pop();
+    const underButton = keyboardLabels(continueSkipPrompt?.markup ?? "").find((label) => label.includes("tagidan"));
+    assert(
+      Boolean(underButton),
+      `«yozuvning tagidan» tugmasi berildi (${keyboardLabels(continueSkipPrompt?.markup ?? "").join(", ")})`,
+    );
     const beforeContinueReady = readyCount();
-    send("⏭ 0");
+    send(underButton ?? "⏭ 0");
     await waitFor(() => readyCount() > beforeContinueReady, 20000, "davom etish tasdiqi");
     const continued = mock.texts.filter((entry) => entry.text.includes("✅ Tayyor!")).pop();
     assert(

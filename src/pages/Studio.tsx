@@ -1,19 +1,26 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  AlertTriangle,
   BookOpen,
+  CheckCircle2,
   ChevronDown,
   Eraser,
+  Loader2,
   PenLine,
   RotateCcw,
+  Send,
   Shuffle,
   Sigma,
   Sparkles,
+  X,
 } from "lucide-react";
 import { SiteFooter, SiteHeader } from "@/components/site-chrome";
+import { useMiniApp } from "@/hooks/use-mini-app";
+import { cn } from "@/lib/utils";
 import { FontGallery } from "@/components/font-gallery";
 import { NotebookPreview } from "@/components/notebook-preview";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Badge, Segmented, Slider } from "@/components/ui/controls";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label, Textarea } from "@/components/ui/form";
@@ -63,9 +70,16 @@ export default function Studio() {
   const [showFonts, setShowFonts] = useState(false);
 
   const { pages, loading, error, warnings, elapsedMs } = useNotebookRender(text, style);
+  const miniApp = useMiniApp();
+  const sending = miniApp.send.status === "sending";
 
   const update = <K extends keyof NotebookStyle>(key: K, value: NotebookStyle[K]) =>
     setStyle((prev) => ({ ...prev, [key]: value }));
+
+  /** Telegram Mini App rejimida: matn va sozlamalarni botga yuborib, chatga qaytaradi. */
+  const sendToChat = () => {
+    void miniApp.sendToChat({ text, style });
+  };
 
   /** "Adabiyot" yoki "Matematika" uchun tayyor kombinatsiyani qo'llaydi. */
   const applyPreset = (presetId: "adabiyot" | "matematika") => {
@@ -79,6 +93,28 @@ export default function Studio() {
       <SiteHeader />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10">
+        {miniApp.active && (
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-marker/40 bg-white/80 px-4 py-3 shadow-note">
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-ink text-paper">
+                <Send className="h-4 w-4" />
+              </span>
+              <div className="leading-tight">
+                <p className="text-sm font-semibold text-ink">
+                  {miniApp.userName ?? "Telegram foydalanuvchisi"}
+                </p>
+                <p className="text-xs text-pencil/70">
+                  Mini App rejimi — natijani chatga yuborish mumkin
+                </p>
+              </div>
+            </div>
+            <Button variant="ghost" size="sm" onClick={miniApp.close}>
+              <X className="h-4 w-4" />
+              Yopish
+            </Button>
+          </div>
+        )}
+
         <div className="mb-8 max-w-3xl">
           <Badge tone="marker" className="mb-3">
             <Sparkles className="h-3.5 w-3.5" />
@@ -96,6 +132,89 @@ export default function Studio() {
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,440px)_minmax(0,1fr)]">
           <div className="space-y-6">
+            {/* Telegram Mini App: natijani to'g'ridan-to'g'ri chatga qaytarish */}
+            <Card
+              className={cn(
+                miniApp.active && "border-marker/45 bg-marker-soft/25",
+                !miniApp.active && "bg-white/70",
+              )}
+            >
+              <CardHeader>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="hand text-2xl">Chatga yuborish</CardTitle>
+                    <CardDescription>
+                      {miniApp.active
+                        ? "Matn va tanlangan sozlamalar botga yuboriladi — varaqalar shu chatga qaytadi."
+                        : "Studio Telegram ichida (Mini App) ochilsa, natijani chatga yuborish mumkin."}
+                    </CardDescription>
+                  </div>
+                  <Badge tone={miniApp.active ? "marker" : "ink"}>
+                    {miniApp.active ? "Mini App" : "Brauzer"}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {miniApp.active ? (
+                  <>
+                    <Button
+                      variant="marker"
+                      className="w-full"
+                      onClick={sendToChat}
+                      disabled={sending || text.trim().length === 0}
+                    >
+                      {sending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
+                      {sending ? "Yuborilmoqda…" : "Chatga yuborish"}
+                    </Button>
+                    {miniApp.send.message && (
+                      <p
+                        className={cn(
+                          "flex gap-2 rounded-xl border p-3 text-sm",
+                          miniApp.send.status === "sent"
+                            ? "border-sage/40 bg-sage-soft/50 text-ink"
+                            : "border-margin/40 bg-margin-soft/40 text-margin",
+                        )}
+                      >
+                        {miniApp.send.status === "sent" ? (
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                        ) : (
+                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        )}
+                        <span>{miniApp.send.message}</span>
+                      </p>
+                    )}
+                    <p className="text-xs leading-relaxed text-pencil/65">
+                      Sozlamalar botda ham saqlanadi: keyingi varaqalar shu uslubda chiziladi.
+                      Chatda ochiq daftar bo'lsa, matn o'sha daftarga yoziladi.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm leading-relaxed text-pencil/85">
+                      Telegramda botni ochib, menyudagi{" "}
+                      <span className="font-semibold text-ink">🖥 Studio (Mini App)</span> tugmasini
+                      bosing (yoki{" "}
+                      <code className="rounded bg-ink/8 px-1.5 py-0.5 font-mono text-[13px]">
+                        /studio
+                      </code>{" "}
+                      buyrug'ini yuboring) — Studio to'g'ridan-to'g'ri Telegram oynasida ochiladi,
+                      matnni yozasiz va natijani shu chatga yuborasiz.
+                    </p>
+                    <Link
+                      to="/bot"
+                      className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                    >
+                      Mini App'ni qanday yoqish kerak?
+                    </Link>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle>Matn</CardTitle>

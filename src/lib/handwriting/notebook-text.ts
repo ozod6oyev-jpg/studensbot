@@ -147,19 +147,28 @@ export function measureSideText(input: {
 /**
  * Betga yangi matn qo'shadi: yangi so'zlar aynan `startLine`-qatordan
  * boshlanadi (1 dan sanaladi), oradagi qatorlar bo'sh qoladi.
+ *
+ * `startLine` — **chizilgan varaqadagi** qator raqami (foydalanuvchi shu
+ * raqamni tanlaydi), shuning uchun mavjud matn nechta qatorni egallaganini
+ * chaqiruvchi o'lchab beradi: `baseLines = measureSideText(...).lines.length`.
+ * Uzun paragraf bir necha qatorga o'ralishi mumkin, shu sababli matn
+ * uzilishlarini sanash bu yerda yaramaydi: o'sha sanoq o'ralgan qatorlarni
+ * bitta deb hisoblab, so'ralgan joydan ancha pastga yozib yuborardi
+ * (masalan «⏭ 1» uchun 2-3 qator bo'sh qolardi).
  */
-export function appendChunk(text: string, chunk: string, startLine: number): string {
+export function appendChunk(text: string, chunk: string, startLine: number, baseLines: number): string {
   const body = chunk.trim();
   if (body.length === 0) return text;
 
-  const existing = measureLineCount(text);
-  if (existing === 0) {
+  // Bet bo'sh: matn `startLine`-qatordan boshlanadi, oldidagi qatorlar bo'sh.
+  if (baseLines <= 0) {
     const blank = Math.max(0, startLine - 1);
     return `${"\n".repeat(blank)}${body}`;
   }
-  // Yangi matn yangi qatordan boshlanadi; `startLine` undan keyin bo'lsa,
-  // oradagi qatorlar bo'sh qoladi.
-  const gap = Math.max(1, startLine - existing);
+  // Mavjud matn `baseLines` qatorni egallagan; yangisi `startLine`-qatordan
+  // boshlanishi uchun orasiga `gap` ta qator uzilishi qo'shiladi. Kamida bitta
+  // uzilish kerak — aks holda yangi so'zlar oxirgi qatorga qo'shilib ketardi.
+  const gap = Math.max(1, startLine - baseLines);
   return `${text}${"\n".repeat(gap)}${body}`;
 }
 

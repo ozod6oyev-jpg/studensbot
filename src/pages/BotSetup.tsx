@@ -15,6 +15,7 @@ import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/controls";
 import { cn } from "@/lib/utils";
+import { useMiniApp } from "@/hooks/use-mini-app";
 
 /* ------------------------------------------------------------------ */
 /* Nusxa olish bloki                                                   */
@@ -189,6 +190,10 @@ const mathSyntax = [
 
 const envVars = [
   { code: "TELEGRAM_BOT_TOKEN", text: "Majburiy. @BotFather bergan token." },
+  {
+    code: "MINI_APP_URL",
+    text: "Ixtiyoriy. Studioning HTTPS manzili (masalan https://domen.uz/studio). Belgilansa, bot chat menyusiga va pastdagi klaviaturaga «Studio» tugmasini o'zi qo'shadi — sahifa Telegram Mini App sifatida ochiladi.",
+  },
   { code: "BOT_SECRET", text: "Ixtiyoriy. Webhook uchun maxfiy kalit (faqat webhook rejimida)." },
   { code: "PORT", text: "Ixtiyoriy. Webhook server porti, standart 8080." },
   { code: "BOT_DATA_DIR", text: "Ixtiyoriy. Sozlamalar, daftarlar va shaxsiy uslublar saqlanadigan papka: settings.json, notebooks.json, styles.json (standart ./bot/data)." },
@@ -218,16 +223,47 @@ const troubleshooting = [
     code: "Matn yozilmayapti",
     text: "Matn faqat ochiq daftarga yoziladi: `📚 Daftarlar` bo'limidan daftarni tanlang (yoki `✍️ Matn kiritish`), keyin matn yuboring.",
   },
+  {
+    code: "Mini App ochilmayapti",
+    text: "Telegram Mini App'ni faqat HTTPS manzil bilan ochadi: domen va sertifikat (certbot) bo'lishi, nginx `/mini-app/` yo'lini bot portiga proxy qilishi va `MINI_APP_URL` aynan shu domenga qarashi kerak.",
+  },
 ];
 
 /* ------------------------------------------------------------------ */
 
 export default function BotSetup() {
+  const { active } = useMiniApp();
+
   return (
     <div className="min-h-screen">
       <SiteHeader />
 
       <main className="mx-auto w-full max-w-4xl px-5 pb-10 pt-10">
+        {active && (
+          <Card className="mb-8 border-sage/25 bg-sage-soft/40">
+            <CardHeader className="mb-2">
+              <CardTitle className="text-base">Siz Telegram Mini App ichidasiz</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm leading-relaxed text-pencil/85">
+              <p>
+                Bot allaqachon ulangan — bu sahifa faqat ma'lumot uchun. Studio'dan foydalanish uchun
+                uchta qadam yetarli:
+              </p>
+              <ol className="ml-4 list-decimal space-y-1.5">
+                <li>Studio'da matnni yozing (yoki «Adabiyot / Matematika namunasi» tugmasini bosing);</li>
+                <li>daftar turi, siyoh rangi va yozuv uslubini tanlang — natija darhol ko'rinadi;</li>
+                <li>
+                  <strong>«Chatga yuborish»</strong> tugmasini bosing — varaqa shu chatga keladi.
+                </li>
+              </ol>
+              <Link to="/studio" className={cn(buttonVariants({ variant: "default" }), "gap-2")}>
+                <Terminal className="h-4 w-4" />
+                Studio'ni ochish
+              </Link>
+            </CardContent>
+          </Card>
+        )}
+
         <div className="animate-ink-in">
           <Badge tone="marker">
             <NotebookPen className="h-3.5 w-3.5" />
@@ -346,7 +382,79 @@ export default function BotSetup() {
             </Notice>
           </StepCard>
 
-          <StepCard index={4} title="Sozlash: pastdagi menyu">
+          <StepCard index={4} title="Studioni Telegram Mini App sifatida ochish">
+            <p>
+              Studio sahifasi Telegram ichida ham ochiladi: bot chatidagi <strong>«Studio»</strong>{" "}
+              tugmasi bosilganda u <strong>Mini App</strong> sifatida ishga tushadi, matn va sozlamalar
+              shu yerda tanlanadi, natija esa darhol shu chatga varaqa bo'lib qaytadi.
+            </p>
+            <p>Buning uchun bitta domenda ikkita narsa kerak — sayt va bot:</p>
+            <ol className="ml-4 list-decimal space-y-1.5">
+              <li>
+                sayt <code className="font-mono text-[13px]">bun run build</code> bilan yig'iladi va nginx{" "}
+                <code className="font-mono text-[13px]">dist/</code> papkasini ko'rsatadi;
+              </li>
+              <li>
+                <code className="font-mono text-[13px]">/mini-app/</code> yo'li bot portiga (
+                <code className="font-mono text-[13px]">127.0.0.1:8080</code>) proxy qilinadi.
+              </li>
+            </ol>
+            <CodeBlock
+              label="/etc/nginx/sites-available/daftar"
+              code={
+                "server {\n" +
+                "    listen 443 ssl;\n" +
+                "    server_name daftar.sizning-domen.uz;\n" +
+                "\n" +
+                "    root /opt/daftar-bot/dist;\n" +
+                "    index index.html;\n" +
+                "\n" +
+                "    location / { try_files $uri $uri/ /index.html; }\n" +
+                "\n" +
+                "    # Mini App natijasini chatga yuboradigan bot yo'li.\n" +
+                "    location /mini-app/ {\n" +
+                "        proxy_pass http://127.0.0.1:8080;\n" +
+                "    }\n" +
+                "}"
+              }
+            />
+            <p>
+              Keyin <code className="font-mono text-[13px]">.env</code> fayliga Mini App manzilini yozamiz
+              — u Telegram'ga ham, bot klaviaturasidagi tugmaga ham shu manzil bo'lib qo'shiladi:
+            </p>
+            <CodeBlock label=".env" code={"MINI_APP_URL=https://daftar.sizning-domen.uz/studio"} />
+            <CodeBlock
+              label="server (root)"
+              code={"sudo systemctl restart daftar-bot\nsudo -u daftar /usr/local/bin/bun run /opt/daftar-bot/bot/index.ts info"}
+            />
+            <p>
+              Xizmat qayta ishga tushgach chat menyusida (xabar yozish qatorining yonida) va pastdagi
+              klaviaturada <strong>«Studio»</strong> tugmasi paydo bo'ladi. Uni bosgan foydalanuvchi
+              Studio'ni Telegram ichida ochadi.
+            </p>
+            <Notice tone="warn" title="HTTPS shart">
+              Telegram Mini App'ni faqat <strong>HTTPS</strong> manzil bilan ochadi, shuning uchun domen va
+              sertifikat (certbot) kerak. Domen bo'lmasa bot polling rejimida avvalgidek ishlayveradi —
+              faqat Mini App tugmasi ko'rinmaydi.
+            </Notice>
+            <Notice tone="info" title="Domeningiz bo'lmasa">
+              Domen shart emas — faqat HTTPS kerak. Bepul yo'l:{" "}
+              <code className="font-mono text-[13px]">sslip.io</code> nomi bilan certbot sertifikati olinadi
+              (masalan{" "}
+              <code className="font-mono text-[13px]">
+                MINI_APP_URL=https://95.123.45.67.sslip.io/studio
+              </code>
+              ), yoki Cloudflare Tunnel bir zumda vaqtinchalik HTTPS manzil beradi. Ikkalasining buyruqlari{" "}
+              <code className="font-mono text-[13px]">deploy/README.md</code> faylida yozilgan.
+            </Notice>
+            <Notice tone="info" title="Bot va sayt turli domenda bo'lsa">
+              Sayt bir domenda, bot boshqasida tursa, saytni yig'ishdan oldin{" "}
+              <code className="font-mono text-[13px]">VITE_MINI_APP_ENDPOINT</code> ni bot manziliga
+              qarating, masalan <code className="font-mono text-[13px]">https://bot.example.com/mini-app/send</code>.
+            </Notice>
+          </StepCard>
+
+          <StepCard index={5} title="Sozlash: pastdagi menyu">
             <p>
               Botdagi natija Studio'dagi bilan bir xil dvigatel orqali chiziladi — ya'ni{" "}
               <Link to="/studio" className="font-semibold text-ink underline decoration-marker/60 decoration-2 underline-offset-2">
@@ -367,7 +475,7 @@ export default function BotSetup() {
                 },
                 {
                   code: "📄 Qog'oz turi",
-                  text: "Yo'l-yo'l (chiziqli), Katak (5 mm) va Toza — uchtasi ham A4 o'lchamda.",
+                  text: "Yo'l-yo'l (chiziqli), Katak (5 mm) va Toza — uchtasi ham A4 o'lchamda. Bu tanlov daftarsiz varaqalar uchun; daftar ichida uning yaratishda tanlangan qog'ozi ishlatiladi.",
                 },
                 {
                   code: "✍️ Yozuv uslubi",
@@ -482,14 +590,26 @@ export default function BotSetup() {
             </Notice>
           </StepCard>
 
-          <StepCard index={5} title="Daftar yaratish, nomlash va matn yozish">
+          <StepCard index={6} title="Daftar yaratish, nomlash va matn yozish">
             <p>
               Yozishdan oldin daftar kerak: <code className="font-mono text-[13px]">➕ Yangi daftar</code> ni
               bosing va varaq sonini tanlang — <strong>12</strong>, <strong>36</strong>, <strong>48</strong> yoki{" "}
               <strong>96 varaq</strong>. Har varaqning ikki tomoni bo'ladi, ya'ni jami 24/72/96/192 bet.
             </p>
             <p>
-              Varaq soni tanlangach bot <strong>daftar nomini so'raydi</strong>: nomni oddiy matn qilib
+              So'ng bot <strong>daftar qanday bo'lishini</strong> so'raydi — yo'l-yo'l (chiziqli), katak yoki oq
+              qog'oz:{" "}
+              <code className="font-mono text-[13px]">📏 Yo'l-yo'l daftar</code>,{" "}
+              <code className="font-mono text-[13px]">🔲 Katak daftar</code>,{" "}
+              <code className="font-mono text-[13px]">📄 Oq qog'oz</code>. Tanlov{" "}
+              <strong>daftarda saqlanadi</strong> (ma'lumotlar{" "}
+              <code className="font-mono text-[13px]">notebooks.json</code> dagi{" "}
+              <code className="font-mono text-[13px]">paper</code> maydonida) — katak daftar sifatida
+              yaratilgan daftar doim katakda chiziladi, hatto sozlamalardagi qog'oz turi boshqa bo'lsa ham.
+              Shu sababli bitta chatda ham yo'l-yo'l, ham katak daftar yuritish mumkin.
+            </p>
+            <p>
+              Qog'oz turi tanlangach bot <strong>daftar nomini so'raydi</strong>: nomni oddiy matn qilib
               yuboring — masalan <em>"Matematika 8-sinf"</em>. Nom kerak bo'lmasa{" "}
               <code className="font-mono text-[13px]">⏭ Nomsiz qoldirish</code> ni bosing va daftar
               standart nom bilan ochiladi (<code className="font-mono text-[13px]">1-daftar</code>, keyingisi{" "}
@@ -554,7 +674,7 @@ export default function BotSetup() {
             </Notice>
           </StepCard>
 
-          <StepCard index={6} title="Buyruqlar va matematika sintaksisi">
+          <StepCard index={7} title="Buyruqlar va matematika sintaksisi">
             <p className="font-semibold text-ink">Bot buyruqlari</p>
             <CommandTable rows={botCommands} />
             <p className="pt-4 font-semibold text-ink">Matematika yozuvi</p>
@@ -565,7 +685,7 @@ export default function BotSetup() {
             </p>
           </StepCard>
 
-          <StepCard index={7} title="Muammolar va yechimlar">
+          <StepCard index={8} title="Muammolar va yechimlar">
             <CommandTable rows={troubleshooting} />
             <p className="pt-3">
               Yordam kerak bo'lsa, avval{" "}

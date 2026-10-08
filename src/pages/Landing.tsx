@@ -3,8 +3,10 @@ import {
   ArrowRight,
   BookOpenText,
   Grid3x3,
+  NotebookPen,
   PenLine,
   Sigma,
+  Smartphone,
   Sparkles,
   SquareFunction,
 } from "lucide-react";
@@ -13,6 +15,7 @@ import { PaperMock } from "@/components/paper-mock";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/controls";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMiniApp } from "@/hooks/use-mini-app";
 
 const features = [
   {
@@ -61,6 +64,22 @@ const syntax = [
   { code: "a_1", note: "indeks" },
   { code: "\\frac{a}{b}", note: "kasr" },
   { code: "\\sqrt{x}", note: "ildiz" },
+];
+
+/** Mini App (Telegram ichidagi Studio) qadamları. */
+const miniAppSteps = [
+  {
+    title: "Botda «Studio» tugmasini bosing",
+    text: "Tugma chat menyusida (xabar yozish qatorining yonida) va pastdagi klaviaturada turadi — Studio shu zahoti Telegram ichida ochiladi.",
+  },
+  {
+    title: "Matn va sozlamalarni tanlang",
+    text: "Varaq turi, siyoh rangi va yozuv uslubini tanlab, matnni terasiz — natija ekranda darhol ko'rinadi, hech narsa serverga yuborilmaydi.",
+  },
+  {
+    title: "«Chatga yuborish» ni bosing",
+    text: "Bot matnni o'sha chatdagi daftarga yozib, varaq rasmini (yoki PNG faylni) darhol qaytaradi — qayta yozib o'tirish shart emas.",
+  },
 ];
 
 const samples = [
@@ -113,9 +132,16 @@ const faqs = [
     answer:
       "Botda /lined yoki /grid buyruqlari daftar turini, /blue yoki /black siyoh rangini, /caveat va /marck yozuv uslubini o'zgartiradi. Studioda esa hammasi tugmalar orqali boshqariladi.",
   },
+  {
+    question: "Mini App (Telegram ichidagi Studio) qanday ishlaydi?",
+    answer:
+      "Bot menyusidagi «Studio» tugmasi Studio sahifasini Telegram ichida ochadi — matn va sozlamalar shu yerda tanlanadi, «Chatga yuborish» bosilganda esa bot o'sha chatdagi daftarga yozib, varaqni darhol qaytaradi. Mini App uchun sayt HTTPS domenda turishi va /mini-app/ yo'li botga ulangan bo'lishi kerak.",
+  },
 ];
 
 export default function Landing() {
+  const { active, userName, close } = useMiniApp();
+
   return (
     <div className="min-h-screen">
       <SiteHeader />
@@ -126,11 +152,17 @@ export default function Landing() {
       <section className="relative overflow-hidden">
         <div className="mx-auto grid w-full max-w-6xl items-center gap-14 px-5 py-16 lg:grid-cols-[1.05fr_1fr] lg:py-24">
           <div>
-            <div className="animate-ink-in">
+            <div className="animate-ink-in flex flex-wrap items-center gap-2">
               <Badge tone="marker">
                 <Sparkles className="h-3.5 w-3.5" />
                 Telegram bot · chiziqli va katak daftar
               </Badge>
+              {active && (
+                <Badge tone="sage">
+                  <Smartphone className="h-3.5 w-3.5" />
+                  {userName ? `${userName}, Telegram ichidasiz` : "Telegram ichida ochildi"}
+                </Badge>
+              )}
             </div>
 
             <h1
@@ -157,15 +189,21 @@ export default function Landing() {
             >
               <Link to="/studio">
                 <Button size="lg" variant="marker">
-                  Studioda sinab ko'rish
+                  {active ? "Studio'ni ochish" : "Studioda sinab ko'rish"}
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
-              <Link to="/bot">
-                <Button size="lg" variant="outline">
-                  Botni ulash
+              {active ? (
+                <Button size="lg" variant="outline" onClick={close}>
+                  Chatga qaytish
                 </Button>
-              </Link>
+              ) : (
+                <Link to="/bot">
+                  <Button size="lg" variant="outline">
+                    Botni ulash
+                  </Button>
+                </Link>
+              )}
             </div>
 
             <dl
@@ -279,6 +317,100 @@ export default function Landing() {
                   </Button>
                 </Link>
               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Mini App — Telegram ichidagi Studio                               */}
+      {/* ---------------------------------------------------------------- */}
+      <section id="mini-app" className="mx-auto w-full max-w-6xl px-5 py-16">
+        <div className="grid gap-10 rounded-2xl border border-paper-edge bg-white/70 p-6 shadow-paper sm:p-10 lg:grid-cols-[1.05fr_1fr] lg:items-center">
+          <div>
+            <Badge tone="marker">
+              <Smartphone className="h-3.5 w-3.5" />
+              Telegram Mini App
+            </Badge>
+            <h2 className="hand mt-4 text-4xl leading-tight text-ink sm:text-5xl">
+              Studio endi Telegram ichida ham ochiladi
+            </h2>
+            <p className="mt-3 text-base leading-relaxed text-pencil/80">
+              Bot menyusidagi «Studio» tugmasi sahifani Telegram oynasida ochadi. Matnni shu yerda
+              terib, sozlamalarni tanlaysiz — natija esa darhol o'zingiz yozayotgan chatga varaqa
+              bo'lib qaytadi. Botni alohida ochib, matnni qayta yuborish shart emas.
+            </p>
+
+            <ol className="mt-7 space-y-4">
+              {miniAppSteps.map((step, index) => (
+                <li key={step.title} className="flex gap-4">
+                  <span className="hand flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-ink/20 bg-white/80 text-xl text-ink">
+                    {index + 1}
+                  </span>
+                  <div>
+                    <h3 className="text-base font-semibold text-ink">{step.title}</h3>
+                    <p className="mt-1 text-sm leading-relaxed text-pencil/80">{step.text}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <Link to="/studio">
+                <Button variant="marker">
+                  {active ? "Studio'ni ochish" : "Studioda sinab ko'rish"}
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+              <Link to="/bot">
+                <Button variant="outline">Botni qanday ulash kerak?</Button>
+              </Link>
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-pencil/60">
+              Mini App uchun sayt HTTPS domenda turishi va <code className="font-mono">/mini-app/</code>{" "}
+              yo'li botga ulanishi kerak — sozlash qadamlari{" "}
+              <Link to="/bot" className="font-semibold text-ink underline decoration-marker/60 decoration-2 underline-offset-2">
+                qo'llanmada
+              </Link>
+              .
+            </p>
+          </div>
+
+          {/* Telegram oynasi ko'rinishi */}
+          <div className="mx-auto w-full max-w-sm">
+            <div className="overflow-hidden rounded-[26px] border border-ink/15 bg-paper-deep/70 p-3 shadow-paper">
+              <div className="flex items-center gap-2 rounded-xl bg-white/80 px-3 py-2">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-ink text-paper">
+                  <NotebookPen className="h-4 w-4" />
+                </span>
+                <span className="text-sm font-semibold text-ink">Daftar Bot</span>
+                <span className="ml-auto rounded-lg bg-ink/8 px-2 py-1 text-[11px] font-semibold text-ink/70">
+                  Studio
+                </span>
+              </div>
+
+              <div className="mt-3 rounded-xl border border-paper-edge bg-white/70 p-3">
+                <p className="hand text-2xl text-ink">Sana: 12.10.2026</p>
+                <div className="paper-lined mt-2 rounded-lg p-3 text-sm leading-7 text-ink/80">
+                  Bahor keldi. Tog'lar ko'm-ko'k
+                  <br />
+                  yashil libos kiydi, dalalar
+                  <br />
+                  gulga burkandi.
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-pencil/60">
+                    1 varaq · 150 dpi
+                  </span>
+                  <span className="rounded-xl bg-marker px-3 py-1.5 text-xs font-semibold text-ink">
+                    Chatga yuborish
+                  </span>
+                </div>
+              </div>
+
+              <p className="mt-3 text-center text-[11px] text-pencil/60">
+                Natija shu chatga varaqa bo'lib qaytadi
+              </p>
             </div>
           </div>
         </div>
@@ -428,18 +560,29 @@ export default function Landing() {
             <div className="flex shrink-0 flex-wrap gap-3">
               <Link to="/studio">
                 <Button size="lg" variant="marker">
-                  Studioda sinab ko'rish
+                  {active ? "Studio'ni ochish" : "Studioda sinab ko'rish"}
                 </Button>
               </Link>
-              <Link to="/bot">
+              {active ? (
                 <Button
                   size="lg"
                   variant="outline"
                   className="border-paper/40 bg-transparent text-paper hover:bg-paper/10"
+                  onClick={close}
                 >
-                  Botni ulash
+                  Chatga qaytish
                 </Button>
-              </Link>
+              ) : (
+                <Link to="/bot">
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="border-paper/40 bg-transparent text-paper hover:bg-paper/10"
+                  >
+                    Botni ulash
+                  </Button>
+                </Link>
+              )}
             </div>
           </div>
         </div>
