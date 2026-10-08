@@ -144,8 +144,8 @@ function CommandTable({ rows }: { rows: { code: string; text: string }[] }) {
 /* ------------------------------------------------------------------ */
 
 const botCommands = [
-  { code: "/start", text: "Salomlashadi va pastdagi doimiy menyuni chiqaradi: ✍️ Matn kiritish va ⚙️ Sozlamalar." },
-  { code: "/help", text: "Buyruqlar va matematika sintaksisi eslatmasi (menyu ham qoladi)." },
+  { code: "/start", text: "Salomlashadi va pastdagi doimiy menyuni chiqaradi: ✍️ Matn kiritish, ⚙️ Sozlamalar, ℹ️ Yordam, 🆔 Chat ID (Mini App sozlangan bo'lsa — 🖥 Studio (Mini App))." },
+  { code: "/help", text: "Qisqa qo'llanma: hamma narsa menyu tugmalarida, buyruqlar ro'yxati ko'rsatilmaydi." },
   { code: "/settings", text: "Sozlamalar menyusini ochadi: siyoh rangi, qog'oz turi, yozuv uslubi, yozuv sozlamalari, daftarlar va o'z qo'lyozmangizni nusxalash." },
   { code: "/lined", text: "Yo'l-yo'l (chiziqli) daftar — adabiyot, insho, diktant uchun." },
   { code: "/grid", text: "Katak daftar — matematika, algebra, geometriya uchun." },
@@ -161,7 +161,7 @@ const botCommands = [
   { code: "/style", text: "«Uslubimni nusxalash» bo'limini ochadi: o'z qo'lyozmangizni namunadan o'lchab, shaxsiy uslub yasaydi (/uslub ham ishlaydi)." },
   { code: "/size 34", text: "Yozuv o'lchamini o'zgartirish (26–52 oralig'ida)." },
   { code: "/file", text: "Natijani rasm sifatida emas, PNG fayl sifatida yuborish rejimini yoqadi/o'chiradi." },
-  { code: "/id", text: "Chat ID'ni ko'rsatadi — botni alohida chat yoki guruhga ulashda yordam beradi." },
+  { code: "/id", text: "Chat ID'ni ko'rsatadi — botni alohida chat yoki guruhga ulashda yordam beradi (endi 🆔 Chat ID tugmasi ham bor)." },
 ];
 
 const suggestedFonts = [
@@ -495,6 +495,13 @@ export default function BotSetup() {
                 },
               ]}
             />
+            <p>
+              Pastdagi menyuda yana <code className="font-mono text-[13px]">ℹ️ Yordam</code> (qisqa
+              qo'llanma — buyruqlar ro'yxatini ko'rsatmaydi) va{" "}
+              <code className="font-mono text-[13px]">🆔 Chat ID</code> tugmalari bor. Har bir buyruq uchun
+              tugma mavjud, shuning uchun ularni yodlash shart emas; noto'g'ri buyruq yozilsa bot butun
+              ro'yxatni tashlamaydi — faqat qisqa maslahat beradi.
+            </p>
             <Badge tone="sage">Maslahat: adabiyot uchun Yo'l-yo'l + Marck Script, matematika uchun Katak + Caveat</Badge>
 
             <p className="pt-2 font-semibold text-ink">Yozuv shriftini tanlash (39 xil qo'lyozma)</p>
@@ -676,6 +683,11 @@ export default function BotSetup() {
 
           <StepCard index={7} title="Buyruqlar va matematika sintaksisi">
             <p className="font-semibold text-ink">Bot buyruqlari</p>
+            <p>
+              Buyruqlar ishlayveradi, lekin ularni yodlash shart emas: har biri uchun menyuda tugma bor
+              va <code className="font-mono text-[13px]">ℹ️ Yordam</code> qisqa qo'llanmani ochadi. Tasodifan
+              noto'g'ri buyruq yozilsa, bot uzun ro'yxat o'rniga faqat qisqa maslahat qaytaradi.
+            </p>
             <CommandTable rows={botCommands} />
             <p className="pt-4 font-semibold text-ink">Matematika yozuvi</p>
             <CommandTable rows={mathSyntax} />

@@ -85,6 +85,8 @@ const  BTN = {
   styleStop: "⏹ Uslubni to'xtatish",
   styleDelete: "🗑 Uslubni o'chirish",
   skipName: "⏭ Nomsiz qoldirish",
+  help: "ℹ️ Yordam",
+  chatId: "🆔 Chat ID",
 } as const;
 
 interface ReceivedPhoto {
@@ -380,12 +382,63 @@ async function main(): Promise<void> {
     const greetingKeys = keyboardLabels(greeting?.markup ?? "");
     assert(Boolean(greeting), "birinchi /start da salomlashuv yuborildi");
     assert(
-      greetingKeys.length === 2 && greetingKeys.includes(BTN.text) && greetingKeys.includes(BTN.settings),
-      `pastdagi menyuda 2 ta tugma bor (${greetingKeys.join(", ")})`,
+      greetingKeys.length === 4 &&
+        [BTN.text, BTN.settings, BTN.help, BTN.chatId].every((label) => greetingKeys.includes(label)),
+      `pastdagi menyuda 4 ta tugma bor (${greetingKeys.join(", ")})`,
     );
     assert(
       (greeting?.markup ?? "").includes('"resize_keyboard":true'),
       "klaviatura pastdagi menyu sifatida (reply keyboard) yuborildi",
+    );
+
+    // Noma'lum buyruq: uzun buyruqlar ro'yxati emas, qisqa javob.
+    const unknownBefore = mock.texts.length;
+    send("/salom");
+    await waitFor(() => mock.texts.length > unknownBefore, 15000, "noma'lum buyruqqa javob");
+    const unknown = mock.texts[mock.texts.length - 1];
+    assert(
+      unknown.text.includes("bunday buyruq yo'q") && unknown.text.split("\n").length <= 5,
+      `noma'lum buyruqqa qisqa javob keldi (${unknown.text.split("\n").length} qator)`,
+    );
+    assert(
+      !unknown.text.includes("Buyruqlar:") && !/\/(blue|black|lined|grid|size|fonts)\b/.test(unknown.text),
+      "javobda tezkor buyruqlar ro'yxati yo'q",
+    );
+
+    // ℹ️ Yordam tugmasi: qo'llanma (buyruqlar ro'yxatisiz).
+    const helpBefore = mock.texts.length;
+    send(BTN.help);
+    await waitFor(() => mock.texts.length > helpBefore, 15000, "yordam matni");
+    const helpReply = mock.texts[mock.texts.length - 1];
+    assert(
+      helpReply.text.includes("Matematika yozuvi") && helpReply.text.includes("Daftarlar:"),
+      "yordam tugmasi qo'llanmani ko'rsatdi",
+    );
+    assert(
+      !helpReply.text.includes("Buyruqlar:") && !helpReply.text.includes("/fonts"),
+      "qo'llanmada buyruqlar ro'yxati yo'q (faqat tugmalar)",
+    );
+
+    // 🆔 Chat ID tugmasi.
+    const idBefore = mock.texts.length;
+    send(BTN.chatId);
+    await waitFor(() => mock.texts.length > idBefore, 15000, "chat ID javobi");
+    const idReply = mock.texts[mock.texts.length - 1];
+    assert(
+      idReply.text.includes(`Chat ID: ${TEST_CHAT_ID}`),
+      `chat ID tugmasi javob berdi: "${idReply.text}"`,
+    );
+
+    // /studio buyrug'i tanilishi kerak (eski o'rnatishda «bunday buyruq yo'q» derdi).
+    const studioBefore = mock.texts.length;
+    send("/studio");
+    await waitFor(() => mock.texts.length > studioBefore, 15000, "/studio javobi");
+    const studioReply = mock.texts[mock.texts.length - 1];
+    assert(
+      studioReply.text.includes("Studio") &&
+        !studioReply.text.includes("bunday buyruq yo'q") &&
+        studioReply.text.includes("MINI_APP_URL"),
+      `/studio buyrug'i tanildi: "${studioReply.text.split("\n")[0]}"`,
     );
 
     console.log("\n=== 2-holat: daftar yo'q — matn kiritish tugmasi ===");

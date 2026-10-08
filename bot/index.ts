@@ -317,6 +317,9 @@ const L = {
   styleDelete: "🗑 Uslubni o'chirish",
   // Telegram Mini App (Studio) tugmasi.
   studio: "🖥 Studio (Mini App)",
+  // Tezkor buyruqlar ro'yxati o'rniga: pastdagi menyudagi tugmalar.
+  help: "ℹ️ Yordam",
+  chatId: "🆔 Chat ID",
 } as const;
 
 /** Namunada yoziladigan so'zlar (har xil harflar uchun 10 ta). */
@@ -444,33 +447,25 @@ const CYRILLIC_RE = /[\u0400-\u04FF]/;
 const HELP_TEXT = [
   "📓 Daftar Bot — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
   "",
-  "Pastdagi menyudan foydalaning:",
+  "Hammasi tugmalarda — buyruq yodlash shart emas:",
   `• ${L.text} — yozishni boshlash (daftar tanlanadi)`,
-  `• ${L.settings} — siyoh rangi, qog'oz turi, yozuv uslubi va boshqa sozlamalar`,
-  "",
-  "Buyruqlar:",
-  "/start — menyuni ko'rsatish",
-  "/settings — sozlamalar menyusi",
-  "/id — chat ID'ni ko'rsatadi",
-  "/studio — Studio'ni Telegram ichida ochish (Mini App)",
-  "/fonts — shriftlar kutubxonasi (rasm ko'rinishida)",
-  "/font <id> — shriftni tanlash (masalan /font badscript)",
-  `/size ${SIZE_MIN}..${SIZE_MAX} — shrift o'lchami`,
-  "/file — natijani PNG fayl qilib yuborish",
-  ...INK_IDS.map((id) => `/${id}`).join(" ") + " — siyoh rangi",
-  PAPER_IDS.map((id) => `/${id}`).join(" ") + " — qog'oz turi",
-  "/help — shu yordam",
-  "/style — o'z yozuv uslubingizni nusxalash",
+  `• ${L.settings} ichida: 🖋 siyoh rangi (10 xil), 📄 qog'oz turi (yo'l-yo'l,`,
+  `  katak, oq qog'oz), ${L.font} (${FONT_LIBRARY.length} shrift, rasm ko'rinishida),`,
+  "  📐 yozuv sozlamalari (o'lcham, qator oralig'i, qo'l tebranishi, matematika,",
+  "  yuborish turi) va 📚 daftarlar (yozish, tahrirlash, PDF kitob, nomini o'zgartirish),",
+  `• ${L.styleCopy} — o'z qo'lyozmangizni nusxalash,`,
+  `• ${L.help} — shu qo'llanma, ${L.chatId} — chat raqamingiz,`,
+  `• 🖥 Studio (Mini App) sozlanganda — chat menyusidagi tugma bilan Studio'ni`,
+  "  Telegram ichida ochib, natijani chatga yuborasiz.",
   "",
   "O'z qo'l yozuvingiz: 🖋 Uslubimni nusxalash — 10 ta so'zni yo'l-yo'l daftarga,",
   "10 ta raqamni katak daftarga yozib suratga olasiz; bot uslubni o'lchab, faqat",
   "sizga ko'rinadigan shaxsiy uslub qilib saqlaydi.",
   "",
-  "Daftarlar: ➕ Yangi daftar (12/36/48/96 varaq) — varaq sonini tanlagach nom ham",
-  "beriladi. Yozgan matningiz varaq-tomonga ketma-ket tushadi: old tomonda chegara",
-  "chapda, orqa tomonda — o'ngda.",
-  "📚 Daftarlar bo'limida har bir daftar kartasi bor: yozish, kitob (PDF) qilib",
-  "yuklab olish va nomini o'zgartirish.",
+  "Daftarlar: ➕ Yangi daftar (12/36/48/96 varaq) — so'ng qog'oz turi (yo'l-yo'l,",
+  "katak yoki oq qog'oz) va nom tanlanadi; tanlangan qog'oz daftarda saqlanadi.",
+  "Yozgan matningiz varaq-tomonga ketma-ket tushadi: old tomonda chegara chapda,",
+  "orqa tomonda — o'ngda.",
   "",
   "Matematika yozuvi:",
   "• daraja: x^2, x^{10}",
@@ -827,7 +822,11 @@ function unmark(label: string): string {
 }
 
 function mainKeyboard(): TgMarkup {
-  const rows: ButtonSpec[][] = [[L.text, L.settings]];
+  const rows: ButtonSpec[][] = [
+    [L.text, L.settings],
+    // Yordam va chat ID — buyruqlar ro'yxati o'rniga tugma bo'lib turadi.
+    [L.help, L.chatId],
+  ];
   // Mini App sozlangan bo'lsa — Studio pastdagi menyudan ham ochiladi.
   const studio = miniAppUrl();
   if (studio) rows.push([{ text: L.studio, webApp: studio }]);
@@ -1183,6 +1182,8 @@ function welcomeText(): string {
     "",
     `🖋 ${L.styleCopy} — 10 ta so'z va 10 ta raqamni yozib suratga olasiz, bot`,
     "o'lchab, sizning qo'lyozmangizga mos shaxsiy uslub yasaydi.",
+    "",
+    `${L.help} tugmasida qisqa qo'llanma bor — buyruqlarni yodlash shart emas.`,
     ...(miniAppUrl()
       ? [
           "",
@@ -3009,6 +3010,17 @@ async function handleStyleSample(chatId: number, fileId: string): Promise<void> 
 async function handleMenuLabelInner(chatId: number, label: string): Promise<boolean> {
   const style = styleFor(chatId);
 
+  // 0. Yordam va chat ID: buyruqlar ro'yxati o'rniga tugmalar.
+  if (label === L.help) {
+    await updateSettings(chatId, { menu: "main" });
+    await sendMessage(chatId, HELP_TEXT, mainKeyboard());
+    return true;
+  }
+  if (label === L.chatId) {
+    await sendMessage(chatId, `🆔 Chat ID: ${chatId}`, mainKeyboard());
+    return true;
+  }
+
   // 1. Menyu tugmalari.
   if (label === L.settings) {
     await sendMessage(chatId, settingsText(chatId), settingsKeyboard());
@@ -3387,9 +3399,15 @@ function parseCommand(text: string): { command: string; args: string[] } {
 async function handleCommand(chatId: number, text: string): Promise<void> {
   const { command, args } = parseCommand(text);
 
-  if (command === "/start" || command === "/help") {
+  if (command === "/start") {
     await updateSettings(chatId, { menu: "main" });
     await sendMessage(chatId, welcomeText(), mainKeyboard());
+    return;
+  }
+
+  if (command === "/help") {
+    await updateSettings(chatId, { menu: "main" });
+    await sendMessage(chatId, HELP_TEXT, mainKeyboard());
     return;
   }
 
@@ -3503,9 +3521,20 @@ async function handleCommand(chatId: number, text: string): Promise<void> {
     return;
   }
 
-  // Noma'lum buyruq: yordam matnini ko'rsatamiz.
+  // Noma'lum buyruq: qisqa javob. Avval har bir buyruqning ro'yxatini tashlab
+  // yuborardik — foydalanuvchi ekrani to'lib ketardi; endi faqat tugmalarni
+  // taklif qilamiz (to'liq qo'llanma — ℹ️ Yordam tugmasida).
   if (command.startsWith("/") && args.length === 0 && command.length <= 12) {
-    await sendMessage(chatId, `Bunday buyruqni bilmayman: ${command}\n\n${HELP_TEXT}`, mainKeyboard());
+    await sendMessage(
+      chatId,
+      [
+        `❓ «${command}» — bunday buyruq yo'q.`,
+        "",
+        `Pastdagi tugmalardan foydalaning: ${L.text} yoki ${L.settings}.`,
+        `Qo'llanma kerak bo'lsa — ${L.help}.`,
+      ].join("\n"),
+      mainKeyboard(),
+    );
     return;
   }
 

@@ -110,7 +110,11 @@ Bot pastdagi **doimiy menyu** bilan ishlaydi (tugmalar chat ichida emas):
 
 ```text
 ✍️ Matn kiritish   ⚙️ Sozlamalar
+ℹ️ Yordam          🆔 Chat ID
 ```
+
+`ℹ️ Yordam` qisqa qo'llanmani ochadi (buyruqlar ro'yxatini ko'rsatmaydi — hammasi tugmalarda),
+`🆔 Chat ID` esa chat raqamini aytadi; noma'lum buyruq yozilsa bot faqat qisqa maslahat qaytaradi.
 
 `MINI_APP_URL` sozlangan bo'lsa, shu menyuga yana `🖥 Studio (Mini App)` tugmasi
 qo'shiladi (quyidagi "Telegram Mini App" bo'limiga qarang).

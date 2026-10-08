@@ -109,7 +109,7 @@ qatorning tagida turadi:
 
 | Bo'lim | Tugmalar |
 | --- | --- |
-| Asosiy menyu (`/start`) | `✍️ Matn kiritish`, `⚙️ Sozlamalar` (Mini App sozlangan bo'lsa — `🖥 Studio (Mini App)`) |
+| Asosiy menyu (`/start`) | `✍️ Matn kiritish`, `⚙️ Sozlamalar`, `ℹ️ Yordam`, `🆔 Chat ID` (Mini App sozlangan bo'lsa — `🖥 Studio (Mini App)`) |
 | `⚙️ Sozlamalar` | `🖋 Siyoh rangi`, `📄 Qog'oz turi`, `✍️ Yozuv uslubi`, `📐 Yozuv sozlamalari`, `📚 Daftarlar`, `🖋 Uslubimni nusxalash`, `⬅️ Asosiy menyu` |
 | `🖋 Siyoh rangi` | 10 rang (joriysi ✓ bilan): Ko'k, Qora, Qalam, Yashil, Qizil, Siyohrang, To'q sariq, Pushti, Havorang, Jigarrang |
 | `📄 Qog'oz turi` | `Yo'l-yo'l`, `Katak`, `Toza (A4)` — daftarsiz varaqalar uchun (daftar ichida daftarning o'z qog'ozi ishlatiladi) |
@@ -228,11 +228,14 @@ o'chirish kerak). Uslublar `BOT_DATA_DIR` papkasidagi `styles.json` faylida yozi
 foydalanuvchilarga umuman chiqmaydi. Yoqilgan uslub barcha varaqalarga va `⬇️ PDF yuklab olish`
 kitobiga qo'llanadi; ommaviy shriftlar (`✍️ Yozuv uslubi`) esa o'z holida qoladi.
 
-Quyidagi buyruqlar ham ishlashda davom etadi (tez tanlash uchun):
+Quyidagi buyruqlar ham ishlashda davom etadi (tez tanlash uchun). Ularni yodlash shart emas:
+har biri uchun menyuda tugma bor (`ℹ️ Yordam` qisqa qo'llanmani ochadi, noto'g'ri buyruq yozilsa
+bot **butun ro'yxatni emas**, faqat qisqa maslahat qaytaradi):
 
 | Buyruq | Nima qiladi |
 | --- | --- |
-| `/start`, `/help` | salomlashuv, menyu va qo'llanma |
+| `/start` | salomlashuv va pastdagi menyu |
+| `/help` | qisqa qo'llanma (buyruqlar ro'yxati o'rniga — tugmalar) |
 | `/settings` | sozlamalar menyusini ochadi (pastdagi tugmalar) |
 | `/lined`, `/grid`, `/plain` | yo'l-yo'l, katak, toza varaq |
 | `/blue`, `/black`, `/graphite` | siyoh rangi |
@@ -245,7 +248,7 @@ Quyidagi buyruqlar ham ishlashda davom etadi (tez tanlash uchun):
 | `/caveat`, `/marck` | tez-tez ishlatiladigan ikki shrift uchun qisqa buyruqlar |
 | `/size 34` | yozuv o'lchami (26–52) |
 | `/file` | natijani rasm emas, PNG fayl qilib yuborish |
-| `/id` | chat ID'ni ko'rsatadi (sozlashda yordam beradi) |
+| `/id` | chat ID'ni ko'rsatadi (sozlashda yordam beradi); xuddi shu narsa `🆔 Chat ID` tugmasida ham bor |
 | `/studio` | Studioni Mini App sifatida ochadigan tugma yuboradi (`MINI_APP_URL` sozlangan bo'lsa) |
 
 ## Muhit o'zgaruvchilari
