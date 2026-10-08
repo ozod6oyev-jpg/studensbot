@@ -156,16 +156,37 @@ if [ -n "$REMOTE_URL" ]; then
   if [ -d "${APP_DIR}/.git" ]; then
     runuser -u daftar -- git -C "$APP_DIR" remote set-url origin "$REMOTE_URL" 2>/dev/null || true
     if ! runuser -u daftar -- git -C "$APP_DIR" pull --ff-only; then
-      # Ish paytida kuzatilgan fayllar o'zgarib qolgan bo'lishi mumkin
-      # (masalan `bun install` bun.lock ni yangilaydi) — bunday holatda
-      # `git pull` merjni rad etadi. Indexdagi o'zgarishlar bo'shatiladi va
-      # kuzatilgan fayllar asl holatiga qaytariladi. Kuzatilmaydigan fayllar
-      # (.env, bot/data, dist) tegilmaydi.
-      warn "git pull to'sqinlikka uchradi — kuzatilgan fayllar tiklanib, qayta urinib ko'riladi"
+      # Ikki sabab bilan `git pull` to'xtashi mumkin:
+      #   a) ish paytida kuzatilgan fayl o'zgargan (masalan `bun install`
+      #      bun.lock ni yangilaydi);
+      #   b) kelayotgan versiya papkada allaqachon mavjud kuzatilmaydigan
+      #      fayl qo'shmoqchi bo'ladi.
+      # Ikkala holatda ham serverdagi o'zgarishlar O'CHIRILMAYDI: avval
+      # zaxiraga olinadi, keyin yangilanish davom etadi.
+      BACKUP="${DATA_DIR}/deploy-backup-$(date +%Y%m%d-%H%M%S)"
+      UPSTREAM="$(runuser -u daftar -- git -C "$APP_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+      [ -n "$UPSTREAM" ] || UPSTREAM="origin/main"
+      warn "git pull to'sqinlikka uchradi — serverdagi o'zgarishlar ${BACKUP} ga saqlanib, qayta urinib ko'riladi"
+      mkdir -p "${BACKUP}/untracked"
+      # 1) kuzatilgan fayllardagi barcha o'zgarishlar patch sifatida saqlanadi
+      #    (keyin `git apply` bilan qaytarish mumkin).
+      runuser -u daftar -- git -C "$APP_DIR" diff HEAD > "${BACKUP}/changes.patch" || true
+      # 2) kelayotgan versiya qo'shadigan, ammo papkada allaqachon turgan
+      #    kuzatilmaydigan fayllar zaxiraga ko'chiriladi — ularsiz pull to'xtaydi.
+      while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        runuser -u daftar -- git -C "$APP_DIR" cat-file -e "${UPSTREAM}:${path}" 2>/dev/null || continue
+        mkdir -p "${BACKUP}/untracked/$(dirname "${path}")"
+        cp -p "${APP_DIR}/${path}" "${BACKUP}/untracked/${path}"
+        rm -f "${APP_DIR}/${path}"
+      done < <(runuser -u daftar -- git -C "$APP_DIR" ls-files --others --exclude-standard)
+      # 3) kuzatilgan fayllar asl holatiga qaytariladi (nusxasi zaxirada).
       runuser -u daftar -- git -C "$APP_DIR" reset --quiet || true
       runuser -u daftar -- git -C "$APP_DIR" checkout -- . || fail "Kuzatilgan fayllarni tiklab bo'lmadi: sudo -u daftar git -C ${APP_DIR} status"
       runuser -u daftar -- git -C "$APP_DIR" pull --ff-only \
         || fail "git pull bajarilmadi (${REMOTE_URL}): sudo -u daftar git -C ${APP_DIR} status"
+      chown -R daftar:daftar "$BACKUP" 2>/dev/null || true
+      ok "Serverdagi eski holat saqlandi: ${BACKUP}"
     fi
     ok "Yangilandi (git pull)"
   else

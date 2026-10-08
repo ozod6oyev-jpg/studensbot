@@ -18,14 +18,18 @@
  *      o'chirib qo'ymaydi (xavfsiz nusxadan davom etadi);
  *   5. serverda ish paytida kuzatilgan fayl o'zgarib qolgan bo'lsa (masalan
  *      `bun install` `bun.lock` ni yangilasa) va yangilanish ham o'sha faylga
- *      tegsa, oddiy `git pull` merjni rad etadi — skript buni o'zi tuzatib,
- *      yangilanishni baribir o'rnatadi va `.env` ni saqlab qoladi.
+ *      tegsa, oddiy `git pull` merjni rad etadi — skript serverdagi
+ *      o'zgarishlarni zaxiraga olib, yangilanishni baribir o'rnatadi va
+ *      `.env` ni saqlab qoladi;
+ *   6. kelayotgan versiya papkada allaqachon mavjud kuzatilmaydigan fayl
+ *      qo'shmoqchi bo'lsa ham shu ish qilinadi: eski fayl jimgina o'chirilmaydi,
+ *      zaxira papkasiga ko'chiriladi.
  *
  * Skript root huquqini talab qiladi (deploy.sh ning o'zi ham): root bo'lmasa
  * tekshiruv bajarilmaydi va buni ochiq aytib, xato bilan tugaydi.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -238,8 +242,8 @@ async function main(): Promise<void> {
   const sixth = run(scriptPath, [REMOTE_URL]);
   assert(sixth.status === 0, `skript xatosiz tugadi (kod ${sixth.status})`);
   assert(
-    sixth.output.includes("kuzatilgan fayllar tiklanib"),
-    "iflos nusxa avtomatik tiklanib, pull qaytarildi",
+    sixth.output.includes("serverdagi o'zgarishlar"),
+    "kuzatilgan fayl zaxiralanib, pull qaytarildi",
   );
   assert(
     (await readFile(`${APP}/Readme.md`, "utf8")).includes("yangilangan"),
@@ -247,11 +251,39 @@ async function main(): Promise<void> {
   );
   assert(tokenInEnv() === token, "bu holatda ham token saqlandi");
 
+  console.log("\n=== 7-holat: kelayotgan versiya papkada mavjud kuzatilmaydigan fayl qo'shadi ===");
+  // Haqiqiy serverda aynan shu holat bo'ldi: papkada qo'lda yaratilgan
+  // `pdf.ts` kabi fayllar turgan, keyingi commit esa o'sha nom bilan kelgan.
+  // `git pull` bunday fayllar ustidan yozishdan bosh tortadi — skript ularni
+  // zaxiraga ko'chirib, yangilanishni davom ettirishi kerak.
+  await writeFile(join(REMOTE, "kuzatilmaydigan-yangi.ts"), "repo versiyasi\n", "utf8");
+  git(["add", "-A"], REMOTE);
+  git(["commit", "-q", "-m", "v5-kuzatilmaydigan"], REMOTE);
+  await writeFile(`${APP}/kuzatilmaydigan-yangi.ts`, "serverdagi nusxa\n", "utf8");
+  await writeFile(`${APP}/Readme.md`, "# yana qo'lda o'zgargan\n", "utf8");
+  const seventh = run(scriptPath, [REMOTE_URL]);
+  assert(seventh.status === 0, `skript xatosiz tugadi (kod ${seventh.status})`);
+  assert(seventh.output.includes("eski holat saqlandi"), "zaxira haqida xabar berildi");
+  assert(
+    (await readFile(`${APP}/kuzatilmaydigan-yangi.ts`, "utf8")).includes("repo versiyasi"),
+    "kuzatilmaydigan fayl yangi versiya bilan almashtirildi",
+  );
+  const backups = readdirSync(DATA).filter((name) => name.startsWith("deploy-backup-")).sort();
+  assert(backups.length > 0, `zaxira papkasi yaratildi (${backups.join(", ")})`);
+  const lastBackup = backups.length > 0 ? join(DATA, backups[backups.length - 1]!) : "";
+  const savedFile = join(lastBackup, "untracked/kuzatilmaydigan-yangi.ts");
+  assert(
+    lastBackup !== "" && existsSync(savedFile) && readFileSync(savedFile, "utf8").includes("serverdagi nusxa"),
+    "eski fayl zaxira papkasida saqlanib qoldi",
+  );
+  assert(lastBackup !== "" && existsSync(join(lastBackup, "changes.patch")), "kuzatilgan o'zgarishlar patchi ham saqlandi");
+  assert(tokenInEnv() === token, "bu holatda ham token saqlandi");
+
   if (failures > 0) {
     console.error(`\nDEPLOY TEKSHIRUVI YIQILDI: ${failures} ta shart bajarilmadi.`);
     process.exit(1);
   }
-  console.log("\nDeploy tekshiruvi o'tdi: clone → .env saqlanishi → pull → yangilanish → xavfsiz qayta ishga tushish.");
+  console.log("\nDeploy tekshiruvi o'tdi: clone → .env saqlanishi → pull → yangilanish → xavfsiz qayta ishga tushish → serverdagi o'zgarishlarni zaxiralash.");
 }
 
 main().catch((error) => {
