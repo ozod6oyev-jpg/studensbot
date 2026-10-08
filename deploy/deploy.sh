@@ -155,7 +155,18 @@ if [ -n "$REMOTE_URL" ]; then
   # xatosi bilan to'xtaydi.
   if [ -d "${APP_DIR}/.git" ]; then
     runuser -u daftar -- git -C "$APP_DIR" remote set-url origin "$REMOTE_URL" 2>/dev/null || true
-    runuser -u daftar -- git -C "$APP_DIR" pull --ff-only
+    if ! runuser -u daftar -- git -C "$APP_DIR" pull --ff-only; then
+      # Ish paytida kuzatilgan fayllar o'zgarib qolgan bo'lishi mumkin
+      # (masalan `bun install` bun.lock ni yangilaydi) — bunday holatda
+      # `git pull` merjni rad etadi. Indexdagi o'zgarishlar bo'shatiladi va
+      # kuzatilgan fayllar asl holatiga qaytariladi. Kuzatilmaydigan fayllar
+      # (.env, bot/data, dist) tegilmaydi.
+      warn "git pull to'sqinlikka uchradi — kuzatilgan fayllar tiklanib, qayta urinib ko'riladi"
+      runuser -u daftar -- git -C "$APP_DIR" reset --quiet || true
+      runuser -u daftar -- git -C "$APP_DIR" checkout -- . || fail "Kuzatilgan fayllarni tiklab bo'lmadi: sudo -u daftar git -C ${APP_DIR} status"
+      runuser -u daftar -- git -C "$APP_DIR" pull --ff-only \
+        || fail "git pull bajarilmadi (${REMOTE_URL}): sudo -u daftar git -C ${APP_DIR} status"
+    fi
     ok "Yangilandi (git pull)"
   else
     # Muammoli holat: papka ilgari `rsync` bilan joylashtirilgan (unda .git

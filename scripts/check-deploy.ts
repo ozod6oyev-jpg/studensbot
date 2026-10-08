@@ -15,7 +15,11 @@
  *      bo'lsa, `git clone` uni O'CHIRMAYDI (haqiqiy xato shu edi);
  *   3. keyingi ishga tushirishlar `git pull` qiladi va yangi commitlarni oladi;
  *   4. skript o'rnatilgan papkaning o'zidan ishga tushirilsa, o'z-o'zini
- *      o'chirib qo'ymaydi (xavfsiz nusxadan davom etadi).
+ *      o'chirib qo'ymaydi (xavfsiz nusxadan davom etadi);
+ *   5. serverda ish paytida kuzatilgan fayl o'zgarib qolgan bo'lsa (masalan
+ *      `bun install` `bun.lock` ni yangilasa) va yangilanish ham o'sha faylga
+ *      tegsa, oddiy `git pull` merjni rad etadi — skript buni o'zi tuzatib,
+ *      yangilanishni baribir o'rnatadi va `.env` ni saqlab qoladi.
  *
  * Skript root huquqini talab qiladi (deploy.sh ning o'zi ham): root bo'lmasa
  * tekshiruv bajarilmaydi va buni ochiq aytib, xato bilan tugaydi.
@@ -221,6 +225,27 @@ async function main(): Promise<void> {
   assert(fifth.output.includes("xavfsiz nusxadan qayta ishga tushiriladi"), "o'zini o'chirishdan himoya ishladi");
   assert(existsSync(`${APP}/uchinchi-fayl.txt`), "papka tozalanib, yangi versiya o'rnatildi");
   assert(tokenInEnv() === token, "bu holatda ham token saqlanib qoldi");
+
+  console.log("\n=== 6-holat: serverda o'zgargan kuzatilgan fayl (git pull to'sqinlik qiladi) ===");
+  // Haqiqiy serverda `bun install` kuzatilgan faylni (masalan `bun.lock`) o'zgartirib
+  // qo'yishi mumkin; kelayotgan commit ham o'sha faylga tegadi. Bunday holatda oddiy
+  // `git pull` "Your local changes would be overwritten" xatosi bilan to'xtaydi —
+  // skript kuzatilgan fayllarni tiklab, yangilanishni baribir o'rnatishi kerak.
+  await writeFile(join(REMOTE, "Readme.md"), "# Sinov repozitoriyasi\n\nyangilangan\n", "utf8");
+  git(["add", "-A"], REMOTE);
+  git(["commit", "-q", "-m", "v4-readme"], REMOTE);
+  await writeFile(`${APP}/Readme.md`, "# serverda qo'lda o'zgargan\n", "utf8");
+  const sixth = run(scriptPath, [REMOTE_URL]);
+  assert(sixth.status === 0, `skript xatosiz tugadi (kod ${sixth.status})`);
+  assert(
+    sixth.output.includes("kuzatilgan fayllar tiklanib"),
+    "iflos nusxa avtomatik tiklanib, pull qaytarildi",
+  );
+  assert(
+    (await readFile(`${APP}/Readme.md`, "utf8")).includes("yangilangan"),
+    "o'zgargan kuzatilgan fayl yangi versiyaga yangilandi",
+  );
+  assert(tokenInEnv() === token, "bu holatda ham token saqlandi");
 
   if (failures > 0) {
     console.error(`\nDEPLOY TEKSHIRUVI YIQILDI: ${failures} ta shart bajarilmadi.`);

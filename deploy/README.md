@@ -313,6 +313,7 @@ qatorini domeningizga o'zgartiring.
 | `409 Conflict` | Polling va webhook birga ishlayapti — bittasini to'xtating (`delete-webhook`) |
 | Xizmat ishga tushmayapti | `journalctl -u daftar-bot -n 50` — ko'pincha `.env` da token yo'q yoki Bun yo'li xato |
 | `Manba va maqsad papka bir xil (/opt/daftar-bot)` | Skript `/opt/daftar-bot` ichidan **manzilsiz** ishga tushirilgan — repozitoriy manzilini qo'shib qayta ishga tushiring: `sudo bash /opt/daftar-bot/deploy/deploy.sh https://github.com/ozod6oyev-jpg/studensbot.git` |
+| `git pull`: `Your local changes would be overwritten` | O'rnatilgan nusxada kuzatilgan fayl o'zgargan (masalan `bun install` `bun.lock` ni yangilagan) va kelayotgan yangilanish ham o'sha faylga tegadi. `deploy.sh` buni o'zi tuzatadi (index bo'shatiladi, kuzatilgan fayllar tiklanadi, pull qaytariladi); qo'lda takrorlash: `sudo -u daftar git -C /opt/daftar-bot reset --quiet && sudo -u daftar git -C /opt/daftar-bot checkout -- .` — `.env` va `bot/data` tegilmaydi |
 | `fatal: not a git repository` (`/opt/daftar-bot` ichida `git pull`) | Bu o'rnatilgan nusxa, manba emas — kodni manba papkada yangilang (`cd ~/daftar-bot && git pull`), keyin `sudo bash deploy/deploy.sh` |
 | `can't cd to /opt/daftar-bot` | `chown -R daftar:daftar /opt/daftar-bot` |
 | Sozlamalar yoki daftarlar saqlanmayapti | `/var/lib/daftar-bot` papkasi `daftar` foydalanuvchisiga tegishli bo'lishi kerak (`settings.json`, `notebooks.json`, `styles.json`) |
