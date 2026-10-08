@@ -116,7 +116,17 @@ Bot pastdagi **doimiy menyu** bilan ishlaydi (tugmalar chat ichida emas):
 - `✍️ Matn kiritish` → daftarlar ro'yxati chiqadi; daftar hali bo'lmasa, avval yangi daftar
   yaratish kerakligi aytiladi;
 - `📚 Daftarlar` ichida `📖 <nom> • 5/24` tugmasi bosilsa daftar kartasi ochiladi:
-  `✍️ Shu daftarga yozish`, `⬇️ PDF yuklab olish`, `✏️ Nomini o'zgartirish`, `⬅️ Daftarlar`;
+  `✍️ Shu daftarga yozish`, `⬇️ PDF yuklab olish`, `🛠 Tahrirlash`, `✏️ Nomini o'zgartirish`,
+  `⬅️ Daftarlar`;
+- `✍️ Shu daftarga yozish` avval qayerga yozilganini (oxirgi bet va qator) hamda betdagi bo'sh
+  qatorlarni aytadi; `▶️ Davom etish`, `➕ Yangi betdan` yoki `🔢 Qatorni tanlash` bilan joy
+  tanlanadi, keyin nechta qator tashlab ketish so'raladi (`⏭ 0`, `⏭ 1`, `⏭ 2`, …) va matn aynan
+  shu qatordan boshlab yoziladi;
+- `🛠 Tahrirlash` → `✂️ Yozuvni o'chirish`: yozilgan betlar slayd qilinadi, bet → qator → so'z
+  tanlanadi (boshlanish va tugash joyi), tasdiqlangach o'sha oraliqdagi so'zlar o'chiriladi va
+  tahrirlangan betlar qayta yuboriladi;
+- har bir yozuv va o'chirish `↩️ Yozuvni orqaga qaytarish` / `↩️ Oxirgi amalni qaytarish` bilan
+  bekor qilinadi;
 - `⬇️ PDF yuklab olish` daftarning yozilgan betlarini A4 ko'p betli PDF kitob qilib yuboradi
   (fayl nomi `<daftar nomi>.pdf`); juda katta daftarda PDF bir necha qismga bo'linadi
   (`-1-qism`, `-2-qism`, …). Natija har doim **hujjat** sifatida keladi;
@@ -124,10 +134,16 @@ Bot pastdagi **doimiy menyu** bilan ishlaydi (tugmalar chat ichida emas):
   old tomonida chegara chapda, orqa tomonida o'ngda (xuddi haqiqiy daftar kabi);
 - `⚙️ Sozlamalar` ichida alohida ochiladi: `🖋 Siyoh rangi` (10 ta rang), `📄 Qog'oz turi`
   (Yo'l-yo'l / Katak / Toza (A4)), `✍️ Yozuv uslubi` (39 shrift — ro'yxat rasm ko'rinishida,
-  chunki Telegram shriftlarni ko'rsata olmaydi), `📐 Yozuv sozlamalari`, `📚 Daftarlar`.
+  chunki Telegram shriftlarni ko'rsata olmaydi), `📐 Yozuv sozlamalari`, `📚 Daftarlar`,
+  `🖋 Uslubimni nusxalash`;
+- `🖋 Uslubimni nusxalash` (`/style`, `/uslub`) → 10 ta so'z va (ixtiyoriy) 10 ta raqam namunasi
+  suratga olinadi, bot ularni o'lchab eng yaqin qo'lyozma shriftni tanlaydi va sizning
+  qiyaligingiz, shtrix qalinligi, harflar kengligi bilan shaxsiy uslub yasaydi; uslub nomlanadi
+  va faqat shu chat uchun saqlanadi (bir chatda ko'pi bilan 5 ta uslub).
 
 Ma'lumotlar `BOT_DATA_DIR` papkasida (xizmatda `/var/lib/daftar-bot`) saqlanadi:
-`settings.json` — chat sozlamalari, `notebooks.json` — daftarlar. 🎉
+`settings.json` — chat sozlamalari, `notebooks.json` — daftarlar, `styles.json` — shaxsiy
+uslublar. 🎉
 
 ---
 

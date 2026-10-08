@@ -80,6 +80,12 @@ async function renderPage(
   // `inkDensity` qiymatiga qarab).
   const inkBoost = (fontEntry(primary.id)?.inkDensity ?? 0.1) < 0.028;
 
+  // Shaxsiy uslub (foydalanuvchi namunasi): qiyalik, cho'zilish, qalinlik.
+  const personal = style.personal;
+  const stretch = personal?.stretch ?? 1;
+  const shear = Math.tan(((personal?.slant ?? 0) * Math.PI) / 180);
+  const weight = personal?.weight ?? 1;
+
   alphaMap.fill(0);
 
   const pushContours = (contours: Contour[], alpha: number) => {
@@ -87,17 +93,20 @@ async function renderPage(
     groups.push({ contours, alpha: Math.max(0.15, Math.min(1, alpha)) });
   };
 
-  /** Shtrixni chizadi; kerak bo'lsa qalinlashtirish uchun 4 tomonga siljitadi. */
+  /**
+   * Shtrixni chizadi. Juda ingichka shriftlar (masalan Amatic SC) va qalin
+   * yozuvlar (shaxsiy uslub) uchun konturni bir necha tomonga siljitib
+   * qalinlashtiramiz.
+   */
   const pushInk = (contours: Contour[], alpha: number) => {
     pushContours(contours, alpha);
-    if (!inkBoost) return;
-    const spread = 0.45;
-    for (const [dx, dy] of [
-      [spread, 0],
-      [-spread, 0],
-      [0, spread],
-      [0, -spread],
-    ]) {
+    const spread = Math.max(inkBoost ? 0.45 : 0, (weight - 1) * 2.2);
+    if (spread <= 0.05) return;
+    const steps = weight > 1.35 ? 8 : 4;
+    for (let step = 0; step < steps; step += 1) {
+      const angle = (step * 2 * Math.PI) / steps;
+      const dx = Math.cos(angle) * spread;
+      const dy = Math.sin(angle) * spread;
       pushContours(
         contours.map((contour) => contour.map((point) => ({ x: point.x + dx, y: point.y + dy }))),
         alpha,
@@ -117,12 +126,15 @@ async function renderPage(
         return;
       }
 
-      const advance = glyphAdvance(handle, ch) * size;
+      const advance = glyphAdvance(handle, ch) * size * stretch;
       const dx = rng.signed() * jitterAmount;
       const dy = rng.signed() * jitterAmount * 0.7 + lineState.slope * (x - textLeft) * 0.35 + lineState.offset;
       const angle = rng.signed() * style.wobble * 0.05;
       const scale = 1 + rng.signed() * style.wobble * 0.025;
-      const alphaMod = alpha * (1 - rng.next() * style.wobble * 0.18);
+      // Ingichka yozuv (weight < 1) ochroq siyoh bilan chiziladi — shunda
+      // shtrix ingichka ko'rinadi (konturni toraytirish o'rniga).
+      const alphaMod =
+        alpha * (1 - rng.next() * style.wobble * 0.18) * Math.min(1, Math.max(0.55, weight));
 
       const anchorX = x + dx + advance / 2;
       const anchorY = baseline + dy - size * 0.3;
@@ -131,14 +143,15 @@ async function renderPage(
 
       const transformed: Contour[] = contours.map((contour) =>
         contour.map((point) => {
-          const px = x + dx + (point.x * size - advance / 2) * scale;
+          const px = x + dx + (point.x * size * stretch - advance / 2) * scale;
           const py = baseline + dy + point.y * size * scale;
           const rx = px - anchorX;
           const ry = py - anchorY;
-          return {
-            x: anchorX + rx * cos - ry * sin,
-            y: anchorY + rx * sin + ry * cos,
-          };
+          const rotatedX = anchorX + rx * cos - ry * sin;
+          const rotatedY = anchorY + rx * sin + ry * cos;
+          // Qiyalik: asosiy chiziqdan yuqoridagi nuqtalar yonga suriladi
+          // (musbat burchak — o'ngga qiyalik, ya'ni kursivsimon).
+          return { x: rotatedX + shear * (baseline + dy - rotatedY), y: rotatedY };
         }),
       );
 
@@ -168,7 +181,7 @@ async function renderPage(
 
   layout.pages[index].lines.forEach((line, lineIndex) => {
     lineState.slope = style.wobble * 0.0016;
-    lineState.offset = rng.signed() * style.wobble * 1.6;
+    lineState.offset = rng.signed() * (style.wobble * 1.6 + (personal?.drift ?? 0));
     const lineBaseline = baselineForLine(lineIndex, layout);
     for (const placed of line.atoms) {
       placed.atom.render(sink, textLeft + placed.x, lineBaseline, 1);

@@ -26,6 +26,11 @@ const features = [
     text: "Bir buyruq bilan chiziqli yoki katak daftarni tanlaysiz, siyoh rangini va yozuv uslubini o'zgartirasiz.",
   },
   {
+    icon: Sparkles,
+    title: "O'z qo'lyozmangiz",
+    text: "10 ta so'z va 10 ta raqamni qog'ozga yozib suratga olasiz — bot qo'lingizni o'lchab, keyingi barcha varaqalarni shu uslubda yozadi.",
+  },
+  {
     icon: SquareFunction,
     title: "Matematika ham ishlaydi",
     text: "Kasr, daraja, indeks va ildizlar o'z joyiga tushadi: x^2, a_1, \\frac{a}{b}, \\sqrt{x}.",
@@ -97,6 +102,11 @@ const faqs = [
     question: "Internet uzilsa yoki oflayn bo'lsam bo'ladimi?",
     answer:
       "Rasm yaratish uchun qisqa vaqt ichida javob qaytariladi, shuning uchun barqaror aloqa tavsiya etiladi. Studio esa to'liq brauzerda ishlaydi — matn hech qayerga yuborilmaydi.",
+  },
+  {
+    question: "O'z qo'lyozmamni botga o'rgatsam bo'ladimi?",
+    answer:
+      "Ha. «🖋 Uslubimni nusxalash» bo'limida 1-qadamda 10 ta so'zni yo'l-yo'l daftarga, 2-qadamda 10 ta raqamni katak daftarga yozib suratga olasiz (raqamlarni o'tkazib yuborish ham mumkin). Bot eng yaqin shriftni tanlab, o'lchovlaringizni — qiyalik, shtrix qalinligi, harflar orasi — ustiga qo'yadi. Uslub faqat sizga ko'rinadi va bir chatda ko'pi bilan 5 tasi saqlanadi.",
   },
   {
     question: "Sozlamalarni qanday o'zgartiraman?",
@@ -219,7 +229,7 @@ export default function Landing() {
           </p>
         </header>
 
-        <div className="grid gap-5 md:grid-cols-3">
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {features.map((feature) => (
             <Card key={feature.title} className="transition-transform duration-300 hover:-translate-y-1">
               <CardHeader>

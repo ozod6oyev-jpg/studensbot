@@ -110,13 +110,13 @@ qatorning tagida turadi:
 | Bo'lim | Tugmalar |
 | --- | --- |
 | Asosiy menyu (`/start`) | `✍️ Matn kiritish`, `⚙️ Sozlamalar` |
-| `⚙️ Sozlamalar` | `🖋 Siyoh rangi`, `📄 Qog'oz turi`, `✍️ Yozuv uslubi`, `📐 Yozuv sozlamalari`, `📚 Daftarlar`, `⬅️ Asosiy menyu` |
+| `⚙️ Sozlamalar` | `🖋 Siyoh rangi`, `📄 Qog'oz turi`, `✍️ Yozuv uslubi`, `📐 Yozuv sozlamalari`, `📚 Daftarlar`, `🖋 Uslubimni nusxalash`, `⬅️ Asosiy menyu` |
 | `🖋 Siyoh rangi` | 10 rang (joriysi ✓ bilan): Ko'k, Qora, Qalam, Yashil, Qizil, Siyohrang, To'q sariq, Pushti, Havorang, Jigarrang |
 | `📄 Qog'oz turi` | `Yo'l-yo'l`, `Katak`, `Toza (A4)` |
 | `✍️ Yozuv uslubi` | sahifalab: 8 shriftdan iborat **rasm varaqasi** va `1 Caveat`, `2 Marck Script`, … tugmalari, `⬅️ Oldingi`, `Keyingi ➡️` |
 | `📐 Yozuv sozlamalari` | `🔠 O'lcham`, `〰️ Qo'l tebranishi`, `📏 Qator oralig'i`, `🔢 Matematika`, `🖼 Yuborish turi` |
 | `📚 Daftarlar` | daftarlar ro'yxati (`📖 1-daftar • 5/24`), `➕ Yangi daftar` |
-| daftar kartasi (ro'yxatdagi `📖 …` tugmasi) | `✍️ Shu daftarga yozish`, `⬇️ PDF yuklab olish`, `✏️ Nomini o'zgartirish`, `⬅️ Daftarlar` |
+| daftar kartasi (ro'yxatdagi `📖 …` tugmasi) | `✍️ Shu daftarga yozish`, `⬇️ PDF yuklab olish`, `🛠 Tahrirlash`, `✏️ Nomini o'zgartirish`, `⬅️ Daftarlar` |
 | `➕ Yangi daftar` | `12 varaq`, `36 varaq`, `48 varaq`, `96 varaq`, so'ng nom so'rash: `⏭ Nomsiz qoldirish` |
 
 **Daftar bilan ishlash:** `➕ Yangi daftar` orqali varaq soni (12/36/48/96) tanlanadi — har varaqning
@@ -134,10 +134,45 @@ chiqadi:
 
 | Karta tugmasi | Nima qiladi |
 | --- | --- |
-| `✍️ Shu daftarga yozish` | daftar ochiq qilib belgilanadi — keyingi matnlar shunga yoziladi |
+| `✍️ Shu daftarga yozish` | yozish joyini so'raydi: qaysi betning qaysi qatoridan yoziladi (pastga qarang) |
 | `⬇️ PDF yuklab olish` | daftarning barcha yozilgan betlarini kitobdek PDF hujjat qilib beradi |
+| `🛠 Tahrirlash` | tahrirlash menyusi: `✂️ Yozuvni o'chirish`, `↩️ Oxirgi amalni qaytarish`, `✏️ Nomini o'zgartirish` |
 | `✏️ Nomini o'zgartirish` | yangi nomni matn ko'rinishida so'raydi — keyingi xabar daftar nomi bo'ladi |
 | `⬅️ Daftarlar` | ro'yxatga qaytaradi |
+
+**Yozish joyini tanlash:** `✍️ Shu daftarga yozish` bosilganda bot avval **qayerga yozilganini**
+ko'rsatadi (oxirgi bet va qator raqami), so'ng betning tepasidan sanab **nechta qator bo'sh
+turganini** aytadi va joy tanlashni so'raydi:
+
+| Tugma | Nima qiladi |
+| --- | --- |
+| `▶️ Davom etish` | oxirgi yozuvdan keyingi birinchi bo'sh qatordan davom etadi |
+| `➕ Yangi betdan` | keyingi betni ochib, 1-qatordan boshlaydi |
+| `🔢 Qatorni tanlash` | betdagi bo'sh qatorlarni raqamlab beradi — qatorni tanlaysiz |
+
+Keyin bot **nechta qator tashlab ketishni** so'raydi (`⏭ 0`, `⏭ 1`, `⏭ 2`, `⏭ 3`, `⏭ 5`) va
+"✅ Tayyor! Yozish N-betning M-qatoridan boshlanadi" deb tasdiqlaydi. Shundan keyin yuborilgan matn
+aynan shu joydan boshlab yoziladi; javobda yozuv qayerdan boshlangani va betda **nechta qator toza
+qolgani** qayta sanab beriladi. Yozuv juda uzun bo'lsa, davomi keyingi betdan ketadi.
+
+**Yozuvni orqaga qaytarish:** har bir yozuv va o'chirish tarixga yoziladi. Yozilgan bet ostidagi
+`↩️ Yozuvni orqaga qaytarish` (yoki daftar kartasidagi `↩️ Oxirgi amalni qaytarish`) bosilsa,
+oxirgi amal bekor qilinadi va betlar avvalgi holatida qayta chizilib yuboriladi.
+
+**Yozuvni o'chirish:** `🛠 Tahrirlash` → `✂️ Yozuvni o'chirish` daftarning **yozilgan betlarini
+slayd** qilib ko'rsatadi va bosqichma-bosqich so'raydi:
+
+1. o'chirish boshlanadigan **bet** tanlanadi;
+2. shu betdagi qatorlar matni bilan ko'rsatiladi — **qator raqami** kiritiladi;
+3. qatordagi so'zlar raqamlab beriladi (`1) so'z`, `2) so'z`, …) — boshlanish **so'zi** tanlanadi (u
+   ham o'chiriladi);
+4. shundan keyin betlar yana slayd qilinadi va **qayergacha** o'chirish so'raladi (bet → qator →
+   so'z);
+5. oxirida "❓ O'chirishni tasdiqlaysizmi?" bilan o'chiriladigan oraliq va so'zlar soni ko'rsatiladi —
+   `✅ Ha, o'chirish` bosilganda so'zlar o'chiriladi va tahrirlangan betlar rasm bo'lib qaytadi.
+
+O'chirish ham orqaga qaytariladi (`↩️ Oxirgi amalni qaytarish`) — daftar o'chirishdan oldingi holatga
+qaytadi.
 
 **Daftarni kitobdek yuklab olish:** `⬇️ PDF yuklab olish` bosilganda daftardagi barcha yozilgan
 betlar ketma-ket (old tomon, orqa tomon, keyingi varaq, …) **A4 sahifali ko'p betli PDF** qilib
@@ -148,6 +183,37 @@ bo'ladi. Varaq soni juda ko'p bo'lsa, PDF bir necha qismga bo'linadi (`-1-qism`,
 **Shriftlar rasm ko'rinishida:** Telegram o'z shriftlarini ko'rsata olmaydi, shuning uchun
 `✍️ Yozuv uslubi` bo'limida ro'yxat har bir nom o'z shriftida chizilgan **rasm** ko'rinishida
 yuboriladi va tagidagi tugmalar (`1 Caveat`, `2 Marck Script`, …) shu varaqqa mos keladi.
+
+**O'z qo'lyozmangizni nusxalash:** `⚙️ Sozlamalar` → `🖋 Uslubimni nusxalash` (yoki `/style`,
+`/uslub` buyrug'i) bo'limida bot sizning yozuvingizni o'lchab, unga mos **shaxsiy uslub** yasaydi:
+
+1. **1-qadam — so'zlar:** yo'l-yo'l daftar varag'iga quyidagi 10 ta so'zni yozib suratga olasiz:
+   `salom, maktab, daftar, kitob, qalam, yozuv, o'qituvchi, do'stlik, quyosh, bahor`;
+2. **2-qadam — raqamlar:** katak daftarga 10 ta raqam (`0 1 2 3 4 5 6 7 8 9`) yozib suratga olasiz
+   yoki `⏭ Raqamlarsiz davom etish` bilan bu qadamni o'tkazib yuborasiz.
+
+Surat varaqning to'rt burchagi bilan, yorug' joyda va to'liq ko'rinadigan qilib olinadi; yozuvni
+o'zgartirmasdan, odatdagidek yozish tabiiyroq natija beradi. Qatorlar o'qilmasa yoki siyoh juda kam
+bo'lsa, bot varaqni qayta suratga olishni so'raydi.
+
+O'lchovdan keyin bot namunalar eng yaqin **qo'lyozma shriftni** (39 shrift ichidan) tanlaydi va
+o'lchangan xususiyatlarni — qiyalik, shtrix qalinligi, harflar kengligi va orasi, tebranish — shu
+uslubga qo'shadi. So'ng nom so'raladi: keyingi xabar uslub nomi bo'ladi (28 belgigacha), yoki
+`⏭ Nomsiz qoldirish` bosilsa nom «Mening uslubim» bo'ladi. Uslub darhol saqlanadi va yoqiladi.
+
+| Tugma | Nima qiladi |
+| --- | --- |
+| `✒️ <nom>` | saqlangan uslubni yoqadi (joriysi ✓ bilan belgilanadi) |
+| `▶️ Namunani boshlash` | yangi namuna olishni boshlaydi |
+| `⏹ Uslubni to'xtatish` | uslubni bazadan o'chirmasdan o'chiradi — ommaviy shriftlar qaytadi |
+| `🗑 Uslubni o'chirish` | saqlangan uslubni o'chiradi; bir nechta bo'lsa bot qaysi birini so'raydi (`🗑 <nom>` tugmalari va `❌ Bekor qilish`), bittasi bo'lsa darhol o'chiriladi |
+| `❌ Bekor qilish` | namuna olish yoki o'chirishni bekor qiladi |
+
+Bir chat ko'pi bilan **5 ta uslub** saqlaydi (yangi namunaga joy ochish uchun keraksizini `🗑` bilan
+o'chirish kerak). Uslublar `BOT_DATA_DIR` papkasidagi `styles.json` faylida yoziladi
+(`settings.json`, `notebooks.json` bilan birga) va **faqat egasiga** ko'rinadi — boshqa
+foydalanuvchilarga umuman chiqmaydi. Yoqilgan uslub barcha varaqalarga va `⬇️ PDF yuklab olish`
+kitobiga qo'llanadi; ommaviy shriftlar (`✍️ Yozuv uslubi`) esa o'z holida qoladi.
 
 Quyidagi buyruqlar ham ishlashda davom etadi (tez tanlash uchun):
 
@@ -161,6 +227,8 @@ Quyidagi buyruqlar ham ishlashda davom etadi (tez tanlash uchun):
 | `/orange`, `/pink`, `/teal`, `/brown` | qolgan to'rtta rang |
 | `/fonts` | shriftlar ro'yxatini ko'rsatadi (nomlar o'z shriftida chizilgan rasm ko'rinishida, id va kategoriya bilan) |
 | `/font <id>` | yozuv shriftini almashtiradi, masalan `/font badscript` |
+| `/style` | shaxsiy uslub bo'limini ochadi (namuna olish, saqlangan uslublar) |
+| `/uslub` | xuddi shu bo'lim, o'zbekcha nom bilan |
 | `/caveat`, `/marck` | tez-tez ishlatiladigan ikki shrift uchun qisqa buyruqlar |
 | `/size 34` | yozuv o'lchami (26–52) |
 | `/file` | natijani rasm emas, PNG fayl qilib yuborish |
@@ -173,7 +241,7 @@ Quyidagi buyruqlar ham ishlashda davom etadi (tez tanlash uchun):
 | `TELEGRAM_BOT_TOKEN` | ✅ | @BotFather bergan token |
 | `BOT_SECRET` | ➖ | webhook uchun maxfiy kalit (ixtiyoriy) |
 | `PORT` | ➖ | webhook server porti (standart `8080`) |
-| `BOT_DATA_DIR` | ➖ | sozlamalar (`settings.json`) va daftarlar (`notebooks.json`) saqlanadigan papka (standart `./bot/data`) |
+| `BOT_DATA_DIR` | ➖ | sozlamalar (`settings.json`), daftarlar (`notebooks.json`) va shaxsiy uslublar (`styles.json`) saqlanadigan papka (standart `./bot/data`) |
 | `TELEGRAM_API_BASE` | ➖ | o'z Bot API serveringiz yoki test uchun API manzili (standart `https://api.telegram.org`) |
 
 Freebuff'da kalitlarni **Settings → Environment (Keys)** bo'limida qo'shing; mahalliy ishda `.env`

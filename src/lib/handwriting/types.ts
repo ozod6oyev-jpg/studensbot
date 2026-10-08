@@ -43,6 +43,33 @@ export type FontId = string;
  */
 export type PageFormat = "a4" | "a5" | "square" | "strip";
 
+/**
+ * Foydalanuvchining o'z yozuvidan olingan uslub ("uslubimni nusxalash" uchun).
+ *
+ * Bu to'liq shrift emas, balki namunadan o'lchangan **xususiyatlar**: qiyalik,
+ * kenglik, shtrix qalinligi, harflar orasidagi masofa va tebranish. Ular
+ * tanlangan (eng yaqin) shriftga qo'llanadi — natija foydalanuvchining qo'l
+ * yozuviga o'xshab ketadi.
+ */
+export interface PersonalStyle {
+  /** Namunaga eng yaqin deb topilgan asosiy shrift. */
+  baseFont: FontId;
+  /** Qiyalik, gradusda: musbat — o'ngga (kursiv), manfiy — chapga. */
+  slant: number;
+  /** Harf kengligining cho'zilishi (1 — shriftning tabiiy kengligi). */
+  stretch: number;
+  /** Shtrix qalinligi (1 — shriftning tabiiy qalinligi). */
+  weight: number;
+  /** Harflar orasidagi masofa ko'paytiruvchisi. */
+  tracking: number;
+  /** Qo'l tebranishi (0–1: yozuvning "tirikligi"). */
+  wobble: number;
+  /** Qator asosining beqarorligi (pikselda, 0–8). */
+  drift: number;
+  /** O'lcham ko'paytiruvchisi (x-balandlik nisbatidan). */
+  sizeScale: number;
+}
+
 export interface NotebookStyle {
   paper: PaperType;
   ink: InkColor;
@@ -68,6 +95,11 @@ export interface NotebookStyle {
    * daftardagidek.
    */
   startSide: PageSide;
+  /**
+   * Shaxsiy uslub (foydalanuvchi namunasi asosida). Berilmasa, oddiy shrift
+   * ishlatiladi — ya'ni hamma uchun ochiq shriftlar o'z holida qoladi.
+   */
+  personal?: PersonalStyle;
 }
 
 export const DEFAULT_STYLE: NotebookStyle = {

@@ -145,7 +145,7 @@ function CommandTable({ rows }: { rows: { code: string; text: string }[] }) {
 const botCommands = [
   { code: "/start", text: "Salomlashadi va pastdagi doimiy menyuni chiqaradi: ✍️ Matn kiritish va ⚙️ Sozlamalar." },
   { code: "/help", text: "Buyruqlar va matematika sintaksisi eslatmasi (menyu ham qoladi)." },
-  { code: "/settings", text: "Sozlamalar menyusini ochadi: siyoh rangi, qog'oz turi, yozuv uslubi, yozuv sozlamalari, daftarlar." },
+  { code: "/settings", text: "Sozlamalar menyusini ochadi: siyoh rangi, qog'oz turi, yozuv uslubi, yozuv sozlamalari, daftarlar va o'z qo'lyozmangizni nusxalash." },
   { code: "/lined", text: "Yo'l-yo'l (chiziqli) daftar — adabiyot, insho, diktant uchun." },
   { code: "/grid", text: "Katak daftar — matematika, algebra, geometriya uchun." },
   { code: "/plain", text: "Toza (chiziqsiz) oq varaq — A4 o'lchamda." },
@@ -157,6 +157,7 @@ const botCommands = [
   { code: "/marck", text: "Chiroyli qo'lyozma uslubi (Marck Script) — ozoda yozuv." },
   { code: "/font <id>", text: "Yozuv shriftini almashtiradi — 39 shriftdan birini tanlang, masalan /font badscript." },
   { code: "/fonts", text: "Shriftlar ro'yxatini ko'rsatadi — har bir nom o'z shriftida chizilgan rasm ko'rinishida (Telegram shriftlarni ko'rsata olmaydi)." },
+  { code: "/style", text: "«Uslubimni nusxalash» bo'limini ochadi: o'z qo'lyozmangizni namunadan o'lchab, shaxsiy uslub yasaydi (/uslub ham ishlaydi)." },
   { code: "/size 34", text: "Yozuv o'lchamini o'zgartirish (26–52 oralig'ida)." },
   { code: "/file", text: "Natijani rasm sifatida emas, PNG fayl sifatida yuborish rejimini yoqadi/o'chiradi." },
   { code: "/id", text: "Chat ID'ni ko'rsatadi — botni alohida chat yoki guruhga ulashda yordam beradi." },
@@ -190,7 +191,7 @@ const envVars = [
   { code: "TELEGRAM_BOT_TOKEN", text: "Majburiy. @BotFather bergan token." },
   { code: "BOT_SECRET", text: "Ixtiyoriy. Webhook uchun maxfiy kalit (faqat webhook rejimida)." },
   { code: "PORT", text: "Ixtiyoriy. Webhook server porti, standart 8080." },
-  { code: "BOT_DATA_DIR", text: "Ixtiyoriy. Sozlamalar va daftarlar saqlanadigan papka: settings.json, notebooks.json (standart ./bot/data)." },
+  { code: "BOT_DATA_DIR", text: "Ixtiyoriy. Sozlamalar, daftarlar va shaxsiy uslublar saqlanadigan papka: settings.json, notebooks.json, styles.json (standart ./bot/data)." },
   {
     code: "TELEGRAM_API_BASE",
     text: "Ixtiyoriy. O'z Bot API serveringiz yoki test uchun API manzili (standart https://api.telegram.org).",
@@ -380,6 +381,10 @@ export default function BotSetup() {
                   code: "📚 Daftarlar",
                   text: "Daftarlar ro'yxati va yangi daftar yaratish; daftar tugmasi bosilsa karta ochiladi — yozish, PDF qilib yuklab olish va nomini o'zgartirish.",
                 },
+                {
+                  code: "🖋 Uslubimni nusxalash",
+                  text: "O'z qo'lyozmangizni nusxalash: 1-qadamda 10 ta so'z, 2-qadamda 10 ta raqam namunasi suratga olinadi, bot o'lchab qo'lingizga yaqin uslub yasaydi — u faqat sizga ko'rinadi.",
+                },
               ]}
             />
             <Badge tone="sage">Maslahat: adabiyot uchun Yo'l-yo'l + Marck Script, matematika uchun Katak + Caveat</Badge>
@@ -407,6 +412,74 @@ export default function BotSetup() {
               Xuddi shu 39 shriftni Studio'dagi shrift galereyasida ko'rib, jonli namunasini
               solishtirishingiz mumkin — bot aynan o'sha shriftlarni ishlatadi.
             </p>
+
+            <p className="pt-2 font-semibold text-ink">O'z qo'lyozmangizni nusxalash</p>
+            <p>
+              Bot <code className="font-mono text-[13px]">🖋 Uslubimni nusxalash</code> bo'limida o'z
+              qo'lingizga moslanadi: u 39 shrift ichidan eng yaqinini topib, uni sizning
+              o'lchovlaringiz bilan chizadi — natijada yozuv ommaviy shrift emas, sizning qo'lyozmangiz
+              bo'ladi.
+            </p>
+            <ol className="ml-4 list-decimal space-y-1.5">
+              <li>
+                <strong>1-qadam — so'zlar.</strong> Yo'l-yo'l daftar varaqasiga 10 ta so'zni (
+                <em>salom, maktab, daftar, kitob, qalam, yozuv, o'qituvchi, do'stlik, quyosh, bahor</em>)
+                o'zgartirmasdan, odatdagidek yozib suratga olasiz.
+              </li>
+              <li>
+                <strong>2-qadam — raqamlar.</strong> Katak daftarga 10 ta raqamni (<em>0 1 2 3 4 5 6 7 8 9</em>)
+                yozasiz yoki{" "}
+                <code className="font-mono text-[13px]">⏭ Raqamlarsiz davom etish</code> bilan bu qadamni
+                o'tkazib yuborasiz — u holda uslub faqat so'zlar o'lchovidan hisoblanadi.
+              </li>
+              <li>
+                <strong>3-qadam — nom.</strong> Bot qiyalik, shtrix qalinligi, harflar kengligi va orasini
+                o'lchab, namunaga eng yaqin shriftni tanlaydi. So'ng uslubga nom berasiz;{" "}
+                <code className="font-mono text-[13px]">⏭ Nomsiz qoldirish</code> bosilsa u <em>«Mening
+                uslubim»</em> deb saqlanadi va darhol yoqiladi.
+              </li>
+            </ol>
+            <p>Bo'limni ochish uchun shu buyruq ham yetadi:</p>
+            <CodeBlock label="Telegram" code={"/style"} />
+            <CommandTable
+              rows={[
+                {
+                  code: "▶️ Namunani boshlash",
+                  text: "Yangi namuna olishni boshlaydi: 1-qadam — 10 ta so'z, 2-qadam — 10 ta raqam.",
+                },
+                {
+                  code: "✒️ Mening qo'lyozmam",
+                  text: "Saqlangan uslubni yoqadi — bundan keyin barcha varaqalar va ⬇️ PDF kitob shu uslubda chiziladi.",
+                },
+                {
+                  code: "⏹ Uslubni to'xtatish",
+                  text: "Uslubni vaqtincha o'chiradi va ommaviy shriftlarga qaytaradi; uslub bazada qoladi.",
+                },
+                {
+                  code: "🗑 Uslubni o'chirish",
+                  text: "Uslubni butunlay o'chiradi; bir nechta uslub saqlangan bo'lsa, qaysi birini o'chirishni so'raydi.",
+                },
+                {
+                  code: "❌ Bekor qilish",
+                  text: "Namuna olishni yoki o'chirishni bekor qiladi (saqlangan uslublarga tegmaydi).",
+                },
+              ]}
+            />
+            <Notice tone="warn" title="Namuna surati qanday bo'lishi kerak">
+              Varaqni to'rt burchagi bilan, yorug' joyda va to'liq ko'rinadigan qilib suratga oling. Yozuvni
+              chiroyli qilib ko'chirish shart emas — o'z qo'lingiz bilan tabiiy yozilgani yaxshiroq o'qiladi.
+              Bot o'qib bo'lmasa yoki siyoh juda kam bo'lsa, qayta suratga olishni so'raydi.
+            </Notice>
+            <Notice tone="info" title="Uslub faqat sizga ko'rinadi">
+              Saqlangan uslublar chatga bog'lanadi: boshqa foydalanuvchi ularni na ro'yxatda, na chizmada
+              ko'radi. Bitta chatda ko'pi bilan <strong>5 ta uslub</strong> turadi — yangisiga joy ochish
+              uchun keraksizini <code className="font-mono text-[13px]">🗑 Uslubni o'chirish</code> bilan
+              o'chirasiz. Ma'lumotlar{" "}
+              <code className="font-mono text-[13px]">BOT_DATA_DIR</code> papkasidagi{" "}
+              <code className="font-mono text-[13px]">styles.json</code> faylida saqlanadi, ommaviy
+              shriftlar esa <code className="font-mono text-[13px]">✍️ Yozuv uslubi</code> bo'limida o'z
+              holida qoladi.
+            </Notice>
           </StepCard>
 
           <StepCard index={5} title="Daftar yaratish, nomlash va matn yozish">
@@ -456,11 +529,15 @@ export default function BotSetup() {
               rows={[
                 {
                   code: "✍️ Shu daftarga yozish",
-                  text: "Daftarni ochadi; keyingi matnlar shu daftarga yoziladi.",
+                  text: "Yozish joyini so'raydi: oxirgi yozuv joyi va betdagi bo'sh qatorlar soni ko'rsatiladi, so'ng ▶️ Davom etish / 🔢 Qatorni tanlash / ➕ Yangi betdan tanlanadi va nechta qator tashlab ketish so'raladi.",
                 },
                 {
                   code: "⬇️ PDF yuklab olish",
                   text: "Daftarning barcha yozilgan betlarini A4 ko'p betli bitta PDF kitob qilib yuboradi (fayl: <daftar nomi>.pdf). Juda katta daftarda PDF bir necha qismga bo'linadi (-1-qism, -2-qism, …).",
+                },
+                {
+                  code: "🛠 Tahrirlash",
+                  text: "Tahrirlash menyusi: ✂️ Yozuvni o'chirish — yozilgan betlar slayd qilinadi, bet → qator → so'z tanlanib, oraliq tasdiqlangach o'sha so'zlar o'chiriladi; ↩️ Oxirgi amalni qaytarish — oxirgi yozuv yoki o'chirishni bekor qiladi.",
                 },
                 {
                   code: "✏️ Nomini o'zgartirish",

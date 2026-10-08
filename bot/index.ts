@@ -4,6 +4,12 @@
  * Foydalanuvchi matn yuboradi → bot uni daftar varaqasiga qo'lda yozilgan
  * ko'rinishda rasm qilib qaytaradi.
  *
+ * `🖋 Uslubimni nusxalash` bo'limi foydalanuvchining **o'z qo'lyozmasini**
+ * o'lchaydi: 10 ta so'z yo'l-yo'l daftarga, 10 ta raqam katak daftarga yozilib
+ * suratga olinadi, bot o'lchovlar bo'yicha eng yaqin shriftni tanlab, unga
+ * qiyalik/qalinlik/kenglik kabi tuzatishlarni qo'llaydi va natijani shu
+ * foydalanuvchi uchun saqlaydi (boshqalarga ko'rinmaydi).
+ *
  * Interfeys pastdagi doimiy (reply) menyuda: tugmalar chat ichida emas, ekran
  * tubida turadi. Asosiy menyu: `✍️ Matn kiritish` va `⚙️ Sozlamalar`; sozlamalar
  * ichida siyoh rangi (10 xil), qog'oz turi (3 xil), yozuv uslubi (39 shrift,
@@ -38,7 +44,30 @@ import { fitToSingleSide } from "../src/lib/handwriting/fit";
 import { FALLBACK_FONT_ID, FONT_LIBRARY, fontEntry } from "../src/lib/handwriting/fonts.generated";
 import { INK_OPTIONS, PAPER_OPTIONS, categoryLabel, fontSupportsCyrillic } from "../src/lib/handwriting/options";
 import { fontDisplayName, fontSummary } from "../src/lib/handwriting/names";
-import { cleanTitle, createStore, type Notebook, type NotebookSheets, type NotebookStore } from "./db";
+import { calibrateStyle, personalSummary } from "../src/lib/handwriting/calibrate";
+import { parseFont } from "../src/lib/handwriting/font";
+import { linesPerPageFor } from "../src/lib/handwriting/layout";
+import {
+  appendChunk,
+  deleteWordRange,
+  measureSideText,
+  wordsOf,
+  type SideTextMeasure,
+} from "../src/lib/handwriting/notebook-text";
+import { decodeSampleImage } from "../src/lib/handwriting/image";
+import { analyzeSample, mergeProfiles, sampleQuality, type SampleProfile } from "../src/lib/handwriting/sample";
+import {
+  MAX_STYLES_PER_CHAT,
+  cleanStyleName,
+  cleanTitle,
+  createStore,
+  createStyleStore,
+  type Notebook,
+  type NotebookSheets,
+  type NotebookStore,
+  type StyleRecord,
+  type StyleStore,
+} from "./db";
 import {
   DEFAULT_STYLE,
   type FontId,
@@ -46,6 +75,7 @@ import {
   type NotebookStyle,
   type PageSide,
   type PaperType,
+  type PersonalStyle,
 } from "../src/lib/handwriting/types";
 
 /* ------------------------------------------------------------------ */
@@ -64,6 +94,10 @@ interface TgMessage {
   chat: TgChat;
   text?: string;
   from?: { id: number; first_name?: string };
+  /** Telegram rasmni bir necha o'lchamda yuboradi (eng kattasi oxirida). */
+  photo?: { file_id: string; width?: number; height?: number }[];
+  /** Hujjat sifatida yuborilgan rasm (masalan PNG skrinshot). */
+  document?: { file_id: string; mime_type?: string; file_name?: string };
 }
 
 interface TgUpdate {
@@ -102,12 +136,60 @@ type MenuId =
   | "math"
   | "send"
   | "books"
-  | "newbook";
+  | "newbook"
+  | "style"
+  | "edit";
 
-/** Bot matn kutayotgan holat: daftarga nom berish yoki nomini o'zgartirish. */
+/**
+ * Bot matn kutayotgan holat: daftarga nom berish, nomini o'zgartirish yoki
+ * yangi shaxsiy uslubga nom berish.
+ */
 type PendingInput =
   | { kind: "create"; sheets: NotebookSheets }
-  | { kind: "rename"; id: string };
+  | { kind: "rename"; id: string }
+  | { kind: "styleName" };
+
+/**
+ * «Uslubimni nusxalash» oqimida nima kutilmoqda: namuna rasmi (so'zlar yoki
+ * raqamlar) yoki bir nechta uslubdan qaysi biri o'chirilishi.
+ */
+type StyleStep = "words" | "digits" | "delete";
+
+/** Yozish oqimi: qaysi betning qaysi qatoridan yoziladi. */
+type WriteStage = "position" | "line" | "skip" | "ready";
+
+interface WriteFlow {
+  notebookId: string;
+  /** Yoziladigan bet (tomon) indeksi. */
+  sideIndex: number;
+  /** Tanlangan qator (1 dan). Tanlanmagan bo'lsa — keyingi bo'sh qator. */
+  line?: number;
+  stage: WriteStage;
+}
+
+/** Betdagi aniq joy: qator va undagi so'z raqami (1 dan). */
+interface SidePoint {
+  side: number;
+  line: number;
+  word: number;
+}
+
+/** O'chirish oqimi: qaysi oraliqdagi so'zlar o'chiriladi. */
+type DeleteStage = "side" | "startLine" | "startWord" | "endSide" | "endLine" | "endWord" | "confirm";
+
+interface DeleteFlow {
+  notebookId: string;
+  stage: DeleteStage;
+  start?: SidePoint;
+  end?: SidePoint;
+}
+
+/** Namunadan hisoblangan, hali nom berilmagan uslub. */
+interface StyleDraft {
+  baseFont: FontId;
+  personal: PersonalStyle;
+  summary: string;
+}
 
 /** Har bir chat uchun saqlanadigan sozlamalar. */
 type ChatSettings = Partial<NotebookStyle> & {
@@ -116,6 +198,26 @@ type ChatSettings = Partial<NotebookStyle> & {
   menu?: MenuId;
   /** Shrift varaqasi sahifasi (0 dan boshlanadi). */
   fontPage?: number;
+  /** Faol shaxsiy uslub id'si ("uslubimni nusxalash"). */
+  styleId?: string;
+  /** Namunaning qaysi qadami kutilmoqda (matn emas, rasm). */
+  styleStep?: StyleStep;
+  /** So'zlar namunasining o'lchovlari (raqamlar namunasi kelguncha saqlanadi). */
+  styleWords?: SampleProfile;
+  /** Nom berilmagan tayyor uslub. */
+  styleDraft?: StyleDraft;
+  /** Uslub ro'yxatidagi tugma matni → uslub id xaritasi. */
+  styleButtons?: Record<string, string>;
+  /** Yozish joyini tanlash oqimi (qaysi betning qaysi qatoridan). */
+  writeFlow?: WriteFlow;
+  /** Yozuvni o'chirish oqimi (qator/so'z bo'yicha). */
+  deleteFlow?: DeleteFlow;
+  /** Yozish oqimida tanlanadigan qator raqamlari (tugma matnlari). */
+  lineButtons?: string[];
+  /** O'chirish oqimida tanlanadigan raqamlar (qator yoki so'z raqamlari). */
+  numberButtons?: string[];
+  /** O'chirish oqimidagi bet tugmalari: tugma matni → bet indeksi. */
+  sideButtons?: Record<string, number>;
   /** Ochiq daftar id'si. */
   notebookId?: string;
   /** Bot matn kutayotgan bo'lsa (nom kiritish uchun). */
@@ -159,9 +261,41 @@ const L = {
   sendMenu: "🖼 Yuborish turi",
   cardWrite: "✍️ Shu daftarga yozish",
   cardDownload: "⬇️ PDF yuklab olish",
+  cardEdit: "🛠 Tahrirlash",
   cardRename: "✏️ Nomini o'zgartirish",
+  editDelete: "✂️ Yozuvni o'chirish",
+  editUndo: "↩️ Oxirgi amalni qaytarish",
+  writeContinue: "▶️ Davom etish",
+  writeNewSide: "➕ Yangi betdan",
+  writePickLine: "🔢 Qatorni tanlash",
+  writeUndo: "↩️ Yozuvni orqaga qaytarish",
+  deleteConfirm: "✅ Ha, o'chirish",
+  deleteCancel: "❌ Bekor qilish",
   skipName: "⏭ Nomsiz qoldirish",
+  // "Uslubimni nusxalash" bo'limi.
+  styleCopy: "🖋 Uslubimni nusxalash",
+  styleStart: "▶️ Namunani boshlash",
+  styleSkipDigits: "⏭ Raqamlarsiz davom etish",
+  styleCancel: "❌ Bekor qilish",
+  styleStop: "⏹ Uslubni to'xtatish",
+  styleDelete: "🗑 Uslubni o'chirish",
 } as const;
+
+/** Namunada yoziladigan so'zlar (har xil harflar uchun 10 ta). */
+const STYLE_SAMPLE_WORDS = [
+  "salom",
+  "maktab",
+  "daftar",
+  "kitob",
+  "qalam",
+  "yozuv",
+  "o'qituvchi",
+  "do'stlik",
+  "quyosh",
+  "bahor",
+];
+/** Namunada yoziladigan raqamlar (katak daftarda). */
+const STYLE_SAMPLE_DIGITS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 
 const PAPER_LABEL: Record<PaperType, string> = {
   lined: "yo'l-yo'l daftar",
@@ -266,6 +400,11 @@ const HELP_TEXT = [
   ...INK_IDS.map((id) => `/${id}`).join(" ") + " — siyoh rangi",
   PAPER_IDS.map((id) => `/${id}`).join(" ") + " — qog'oz turi",
   "/help — shu yordam",
+  "/style — o'z yozuv uslubingizni nusxalash",
+  "",
+  "O'z qo'l yozuvingiz: 🖋 Uslubimni nusxalash — 10 ta so'zni yo'l-yo'l daftarga,",
+  "10 ta raqamni katak daftarga yozib suratga olasiz; bot uslubni o'lchab, faqat",
+  "sizga ko'rinadigan shaxsiy uslub qilib saqlaydi.",
   "",
   "Daftarlar: ➕ Yangi daftar (12/36/48/96 varaq) — varaq sonini tanlagach nom ham",
   "beriladi. Yozgan matningiz varaq-tomonga ketma-ket tushadi: old tomonda chegara",
@@ -290,11 +429,30 @@ const SETTINGS_FILE = join(DATA_DIR, "settings.json");
 
 let settingsCache: SettingsMap = {};
 let notebookStore: NotebookStore | null = null;
+let styleStore: StyleStore | null = null;
 
 /** Daftar bazasi (bir marta ochiladi). */
 async function books(): Promise<NotebookStore> {
   if (!notebookStore) notebookStore = await createStore(DATA_DIR);
   return notebookStore;
+}
+
+/** Shaxsiy uslublar bazasi (bir marta ochiladi). */
+async function styles(): Promise<StyleStore> {
+  if (!styleStore) styleStore = await createStyleStore(DATA_DIR);
+  return styleStore;
+}
+
+/**
+ * Faol shaxsiy uslub — faqat egasiga qaytariladi.
+ *
+ * `styleFor()` sinxron bo'lishi kerak (u ko'p joyda chaqiriladi), shuning uchun
+ * baza ishga tushishda bir marta yuklanadi (`main()` ga qarang).
+ */
+function activeStyle(chatId: number): StyleRecord | undefined {
+  const id = rawSettings(chatId).styleId;
+  if (!id || !styleStore) return undefined;
+  return styleStore.get(chatId, id);
 }
 
 /** Fayldan sozlamalarni o'qiydi; fayl yo'q yoki buzilgan bo'lsa bo'sh obyekt qaytaradi. */
@@ -345,11 +503,22 @@ function styleFor(chatId: number): NotebookStyle {
   // Kutubxonada yo'q shrift saqlanib qolgan bo'lsa (masalan, yangilanishdan keyin),
   // standart shriftga qaytamiz.
   const font = chat.font && fontEntry(chat.font) ? chat.font : DEFAULT_STYLE.font;
-  return {
+  const base: NotebookStyle = {
     ...DEFAULT_STYLE,
     ...chat,
     font,
     seed: (DEFAULT_STYLE.seed + Math.abs(chatId)) % 9973,
+  };
+
+  // Faol shaxsiy uslub bo'lsa — u o'z shrifti va o'lchovlari bilan qo'llanadi.
+  // Uslub faqat egasiga qaytadi, ommaviy shriftlar esa o'z holida qoladi.
+  const personal = activeStyle(chatId);
+  if (!personal) return { ...base, personal: undefined };
+  return {
+    ...base,
+    font: personal.baseFont,
+    wobble: personal.personal.wobble,
+    personal: personal.personal,
   };
 }
 
@@ -565,7 +734,8 @@ function settingsKeyboard(): TgMarkup {
   return reply([
     [L.ink, L.paper],
     [L.font, L.writing],
-    [L.books, L.backMain],
+    [L.books, L.styleCopy],
+    [L.backMain],
   ]);
 }
 
@@ -665,9 +835,9 @@ async function booksKeyboard(chatId: number, list: Notebook[], store: NotebookSt
   return reply(rows);
 }
 
-/** Daftar kartasi tugmalari: yozish, yuklab olish, nomini o'zgartirish. */
+/** Daftar kartasi tugmalari: yozish, yuklab olish, tahrirlash, nom almashtirish. */
 function cardKeyboard(): TgMarkup {
-  return reply([[L.cardWrite], [L.cardDownload], [L.cardRename], [L.backBooks]]);
+  return reply([[L.cardWrite], [L.cardDownload], [L.cardEdit, L.cardRename], [L.backBooks]]);
 }
 
 /** Daftar kartasi: nom, varaq/bet hisobi va amallar izohi. */
@@ -681,7 +851,7 @@ function cardText(chatId: number, notebook: Notebook, store: NotebookStore): str
     `• Varaq: ${notebook.sheets} (${capacity} bet)`,
     `• Band: ${used}/${capacity} bet`,
     "",
-    `Amalni tanlang: ${L.cardWrite}, ${L.cardDownload} yoki ${L.cardRename}.`,
+    `Amalni tanlang: ${L.cardWrite}, ${L.cardDownload}, ${L.cardEdit} yoki ${L.cardRename}.`,
   ].join("\n");
 }
 
@@ -691,6 +861,172 @@ function newBookKeyboard(): TgMarkup {
     [SHEET_BUTTONS[2].text, SHEET_BUTTONS[3].text],
     [L.backBooks],
   ]);
+}
+
+/* ------------------------------------------------------------------ */
+/* Uslubimni nusxalash: tugmalar va matnlar                             */
+/* ------------------------------------------------------------------ */
+
+/** Chatning shaxsiy uslub holati (matnlarda ko'rsatiladi). */
+function styleStatus(chatId: number): string {
+  const record = activeStyle(chatId);
+  if (record) return `«${record.name}» — o'z qo'lyozmangiz`;
+  const saved = styleStore?.list(chatId).length ?? 0;
+  return saved > 0 ? `ommaviy shriftlar (${saved} ta saqlangan uslub)` : "ommaviy shriftlar";
+}
+
+/** Bir nechta uslub bo'lganda qaysi birini o'chirish so'raladi. */
+function deletePickerText(list: { name: string }[]): string {
+  return [
+    "🗑 Qaysi uslubni o'chiray?",
+    "",
+    ...list.map((record) => `• ✒️ ${record.name}`),
+    "",
+    "O'chirilgan uslubni qaytarib bo'lmaydi — kerak bo'lsa namunani qaytadan olish mumkin.",
+    `Bekor qilish uchun ${L.styleCancel} tugmasini bosing.`,
+  ].join("\n");
+}
+
+/** O'chirilgandan keyingi xabar (bazada qolgan uslublar soni bilan). */
+function styleDeletedText(name: string, left: number): string {
+  return [
+    `🗑 «${name}» uslubi o'chirildi.`,
+    left > 0
+      ? `Bazada yana ${left} ta uslub qoldi — kerak bo'lsa ro'yxatdan tanlang.`
+      : `Boshqa saqlangan uslub yo'q. Yangisini ${L.styleStart} bilan olish mumkin.`,
+  ].join("\n");
+}
+
+/**
+ * Uslub bo'limining tugmalari.
+ *
+ * Namuna olish paytida faqat qadamga mos tugmalar ko'rsatiladi; o'chirish
+ * tanlovida esa har bir saqlangan uslub uchun `🗑 <nom>` tugmasi chiqadi. Aks
+ * holda saqlangan uslublar ro'yxati (bosing — yoqiladi), namuna boshlash va
+ * o'chirish tugmalari chiqadi. Saqlangan uslub tugmalarining matni → id xaritasi
+ * sozlamalarga yoziladi (daftarlardagidek), chunki nomlar takrorlanishi mumkin.
+ */
+function styleKeyboard(chatId: number): TgMarkup {
+  const step = rawSettings(chatId).styleStep;
+  if (step === "words") return reply([[L.styleCancel]]);
+  if (step === "digits") return reply([[L.styleSkipDigits], [L.styleCancel]]);
+
+  // O'chirish tanlovi: har bir saqlangan uslub alohida tugma bo'ladi.
+  if (step === "delete") {
+    const saved = styleStore?.list(chatId) ?? [];
+    return reply([...saved.map((record) => [`🗑 ${record.name}`]), [L.styleCancel]]);
+  }
+
+  const list = styleStore?.list(chatId) ?? [];
+  const active = activeStyle(chatId);
+  const rows: string[][] = [];
+
+  for (let index = 0; index < list.length; index += 2) {
+    rows.push(list.slice(index, index + 2).map((record) => mark(record.id === active?.id, `✒️ ${record.name}`)));
+  }
+
+  rows.push([L.styleStart]);
+  if (active) rows.push([L.styleStop]);
+  if (list.length > 0) rows.push([L.styleDelete]);
+  rows.push([L.backSettings]);
+
+  // Tugma matni → uslub id xaritasi. `updateSettings` sozlamalar keshini
+  // sinxron yangilaydi (saqlash esa fonda ketadi), shuning uchun klaviaturani
+  // darhol qaytarish mumkin.
+  const map: Record<string, string> = {};
+  for (const record of list) map[`✒️ ${record.name}`] = record.id;
+  void updateSettings(chatId, { styleButtons: map });
+  return reply(rows);
+}
+
+/** Uslub bo'limining tavsifi + saqlangan uslublar ro'yxati. */
+function styleText(chatId: number): string {
+  const list = styleStore?.list(chatId) ?? [];
+  const active = activeStyle(chatId);
+  return [
+    "🖋 Uslubimni nusxalash",
+    "",
+    "Namunangiz o'lchanadi va bot eng yaqin qo'lyozmani tanlab, uni sizning",
+    "qo'lingizga moslaydi (qiyalik, qalinlik, kenglik, harflar orasi).",
+    "",
+    `Holat: ${styleStatus(chatId)}`,
+    ...(list.length > 0
+      ? [
+          "",
+          `Saqlangan uslublar (${list.length}/${MAX_STYLES_PER_CHAT}):`,
+          ...list.map((record) => `• ✒️ ${record.name} — ${displayName(record.baseFont)}${record.summary ? ` • ${record.summary}` : ""}`),
+          ...(list.length >= MAX_STYLES_PER_CHAT
+            ? [
+                "",
+                `Ko'pi bilan ${MAX_STYLES_PER_CHAT} ta uslub saqlanadi — yangisiga joy ochish uchun keraksizini ${L.styleDelete} bilan o'chirib tashlang.`,
+              ]
+            : []),
+        ]
+      : []),
+    "",
+    "Qanday ishlaydi:",
+    "1️⃣ Yo'l-yo'l daftarga 10 ta so'z yozib, suratga oling.",
+    "2️⃣ Katak daftarga 10 ta raqam yozib, suratga oling (bu qadamni o'tkazib yuborsa ham bo'ladi).",
+    "3️⃣ Uslubga nom bering — u saqlanadi va faqat sizga ko'rinadi.",
+    "",
+    active
+      ? `Hozir «${active.name}» uslubi yoniq. Ro'yxatdan boshqasini tanlashingiz yoki ${L.styleStop} tugmasini bosishingiz mumkin.`
+      : `Boshlash uchun ${L.styleStart} tugmasini bosing.`,
+    `Hamma uchun ochiq shriftlar ${L.font} bo'limida o'zgarmagan holda turadi.`,
+  ].join("\n");
+}
+
+/** 1-qadam: so'zlarni yozish ko'rsatmasi. */
+function styleWordsText(): string {
+  return [
+    "🖋 1-qadam: so'zlar namunasi",
+    "",
+    "Yo'l-yo'l daftar varag'iga quyidagi 10 ta so'zni yozing:",
+    STYLE_SAMPLE_WORDS.join(", "),
+    "",
+    "✍️ Iloji bo'lsa yozuvingizni o'zgartirmasdan, odatdagidek yozing — chiroyli qilib",
+    "ko'chirish shart emas, aksincha asl yozuv tabiiyroq chiqadi.",
+    "So'zlarni ikki-uch satrga bo'lib yozsangiz o'lchov aniqroq bo'ladi.",
+    "📷 Varaq to'rt burchagi bilan ko'rinadigan qilib, yorug' joyda suratga oling.",
+    "Suratni shu chatga yuboring.",
+  ].join("\n");
+}
+
+/** 2-qadam: raqamlarni yozish ko'rsatmasi. */
+function styleDigitsText(): string {
+  return [
+    "✅ So'zlar namunasi o'lchandi.",
+    "",
+    "🖋 2-qadam: raqamlar namunasi",
+    "",
+    "Katak daftar varag'iga quyidagi 10 ta raqamni yozing:",
+    STYLE_SAMPLE_DIGITS.join("  "),
+    "",
+    "Raqamlar shtrix qalinligi va yozuv o'lchamini aniqroq o'lchashga yordam beradi.",
+    `Raqamlarni yozmasangiz ham bo'ladi — ${L.styleSkipDigits} tugmasini bosing.`,
+    "📷 Yozilgan varaqni suratga olib yuboring.",
+  ].join("\n");
+}
+
+/** Chatda band bo'lmagan uslub nomi. */
+function uniqueStyleName(list: StyleRecord[], wanted: string): string {
+  const taken = new Set(list.map((record) => record.name));
+  if (!taken.has(wanted)) return wanted;
+  for (let index = 2; index < 100; index += 1) {
+    const candidate = `${wanted} (${index})`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${wanted} (${Date.now() % 1000})`;
+}
+
+/** Nomsiz qoldirilganda beriladigan uslub nomi. */
+function defaultStyleName(list: StyleRecord[]): string {
+  const taken = new Set(list.map((record) => record.name));
+  for (let index = 1; index < 100; index += 1) {
+    const candidate = index === 1 ? "Mening uslubim" : `Mening uslubim ${index}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return "Mening uslubim";
 }
 
 /** Daftar tugmasining matni: `📖 1-daftar • 5/24`. */
@@ -734,6 +1070,9 @@ function welcomeText(): string {
     `${L.cardRename}.`,
     `${L.settings} ichida: siyoh rangi (10 xil), qog'oz turi (3 xil), yozuv uslubi`,
     `(${FONT_LIBRARY.length} qo'lyozma shrift) va yozuv sozlamalari bor.`,
+    "",
+    `🖋 ${L.styleCopy} — 10 ta so'z va 10 ta raqamni yozib suratga olasiz, bot`,
+    "o'lchab, sizning qo'lyozmangizga mos shaxsiy uslub yasaydi.",
   ].join("\n");
 }
 
@@ -745,6 +1084,7 @@ function settingsText(chatId: number): string {
     `• Siyoh: ${INK_LABEL[style.ink]} (${INK_HEX[style.ink]})`,
     `• Qog'oz: ${PAPER_LABEL[style.paper]} (A4)`,
     `• Yozuv: ${fontSummary(style.font)}`,
+    `• Uslub: ${styleStatus(chatId)}`,
     `• O'lcham: ${style.fontSize}px • Qator: ${style.lineGap}px • Tebranish: ${style.wobble.toFixed(2)}`,
     `• Matematika: ${style.mathMode ? "yoniq" : "o'chiq"} • Yuborish: ${isFileMode(chatId) ? "PNG fayl" : "rasm"}`,
     "",
@@ -862,6 +1202,9 @@ async function openMenu(chatId: number, menu: MenuId): Promise<void> {
         "➕ Yangi daftar\n\nDaftar varaq sonini tanlang. Har varaqning ikki tomoni bor: old tomonida chegara chapda, orqa tomonida — o'ngda.",
         newBookKeyboard(),
       );
+      return;
+    case "style":
+      await sendMessage(chatId, styleText(chatId), styleKeyboard(chatId));
       return;
     case "books": {
       const store = await books();
@@ -1016,7 +1359,12 @@ async function sendSide(chatId: number, notebook: Notebook, sideIndex: number): 
   }
 }
 
-/** Joriy tomonga matn yozadi (tomon kerak bo'lsa ochiladi). */
+/**
+ * Joriy tomonga matn yozadi (tomon kerak bo'lsa ochiladi).
+ *
+ * Yozuv `applySides` orqali yoziladi: shunda oldingi matn tarixga tushadi va
+ * foydalanuvchi ↩️ tugmasi bilan yozuvni butunlay orqaga qaytarishi mumkin.
+ */
 async function writeToSide(notebookId: string, sideIndex: number, text: string): Promise<number | null> {
   const store = await books();
   let index = sideIndex;
@@ -1025,7 +1373,7 @@ async function writeToSide(notebookId: string, sideIndex: number, text: string):
     if (!created) return null;
     index = store.usedSides(store.get(notebookId) as Notebook) - 1;
   }
-  const ok = await store.setSideText(notebookId, index, text);
+  const ok = await store.applySides(notebookId, [{ index, text }], "yozuv");
   return ok ? index : null;
 }
 
@@ -1049,6 +1397,18 @@ async function writeToNotebook(chatId: number, rawText: string): Promise<void> {
     await sendMessage(chatId, "Iltimos, matn yuboring — men uni daftarga yozib beraman. 📝", mainKeyboard());
     return;
   }
+
+  // Yozish joyi tanlangan bo'lsa (✍️ Shu daftarga yozish → joy tanlash), matn
+  // aynan shu betning shu qatoridan boshlab yoziladi.
+  const flow = rawSettings(chatId).writeFlow;
+  if (flow?.stage === "ready" && flow.notebookId === notebook.id) {
+    await writeAtFlow(chatId, notebook, body, flow);
+    return;
+  }
+  // Joy tanlash hali tugallanmagan bo'lsa ham matn yuborilishi mumkin: bunday
+  // holda odatdagi tartibda (oxirgi betdan davom etib) yozamiz va eskirgan
+  // oqim holatini tozalaymiz.
+  if (flow) await updateSettings(chatId, { writeFlow: undefined });
 
   if (store.usedSides(notebook) >= store.capacity(notebook)) {
     await sendMessage(
@@ -1129,6 +1489,83 @@ async function writeToNotebook(chatId: number, rawText: string): Promise<void> {
   if (changed.length === 0) {
     await sendMessage(chatId, "Matnni joylashtirib bo'lmadi. Boshqa shrift yoki qog'oz turini sinab ko'ring.", mainKeyboard());
   }
+}
+
+/**
+ * Tanlangan betning tanlangan qatoridan yozadi va betdagi bo'sh joyni qayta
+ * sanab, foydalanuvchiga qayergacha to'lganini aytadi.
+ *
+ * Matn bitta betga sig'masa, qolgani keyingi betlardan davom etadi (yozish
+ * tugagach ↩️ tugmasi bilan hammasini orqaga qaytarish mumkin).
+ */
+async function writeAtFlow(chatId: number, notebook: Notebook, text: string, flow: WriteFlow): Promise<void> {
+  const store = await books();
+  const fonts = await fontsFor(styleFor(chatId));
+  const capacity = store.capacity(notebook);
+  const used = store.usedSides(notebook);
+  const sideIndex = Math.max(0, Math.min(flow.sideIndex, used));
+  const line = Math.max(1, flow.line ?? 1);
+
+  // Betning oxirgi yozuvidan keyin `line`-qatorgacha bo'sh joy qoldirib yozamiz.
+  const base = notebook.sides[sideIndex]?.text ?? "";
+  const candidate = appendChunk(base, text, line);
+  const style = sideStyle(chatId, Math.min(sideIndex, Math.max(0, used - 1)));
+  const fit = await fitToSingleSide(candidate, { style, fonts });
+  const head = fit.fitsEntirely ? candidate : fit.head;
+  let rest = fit.fitsEntirely ? "" : fit.tail.trim();
+
+  const changes: { index: number; text: string }[] = [{ index: sideIndex, text: head }];
+  const touched: number[] = [sideIndex];
+  let index = sideIndex;
+
+  // Qolgan matnni keyingi betlarga joylashtiramiz (mavjud betlar ustidan
+  // yozilmaydi — faqat bo'sh joydan keyin qo'shiladi).
+  while (rest.length > 0 && index + 1 <= used && index + 1 < capacity) {
+    index += 1;
+    const previous = index < used ? notebook.sides[index].text : "";
+    const attempt = previous.length > 0 ? `${previous}\n${rest}` : rest;
+    const nextFit = await fitToSingleSide(attempt, { style: sideStyle(chatId, index), fonts });
+    const nextHead = nextFit.fitsEntirely ? attempt : nextFit.head;
+    if (nextHead.trim().length === 0) break;
+    changes.push({ index, text: nextHead });
+    touched.push(index);
+    rest = nextFit.fitsEntirely ? "" : nextFit.tail.trim();
+  }
+
+  await store.applySides(notebook.id, changes, "yozuv");
+  await updateSettings(chatId, { notebookId: notebook.id, writeFlow: undefined });
+  const updated = store.get(notebook.id) as Notebook;
+
+  if (head.trim().length === 0) {
+    await sendMessage(
+      chatId,
+      [
+        "⚠️ Matn bu betga sig'madi.",
+        "",
+        "🔢 Qatorni tanlash bilan boshqa qatorni yoki ➕ Yangi betdan bilan yangi betni tanlab ko'ring.",
+      ].join("\n"),
+      cardKeyboard(),
+    );
+    return;
+  }
+
+  for (const at of touched) await sendSide(chatId, updated, at);
+
+  const measure = await measureSide(chatId, sideIndex, updated.sides[sideIndex]?.text ?? "");
+  await sendMessage(
+    chatId,
+    [
+      `✅ «${updated.title}» daftariga yozildi.`,
+      `📄 ${sideIndex + 1}-betning ${line}-qatoridan boshlandi — hozir ${measure.lines.length} qator band, tepadan sanaganda ${measure.freeLines} qator bo'sh.`,
+      rest.length > 0 ? "⚠️ Matn juda uzun edi — bir qismi keyingi betga o'tdi, qolganini yana yuboring." : "",
+      touched.length > 1 ? `🖼 Yozilgan betlar: ${touched.map((at) => at + 1).join(", ")}` : "",
+      "",
+      `Yozuv yoqmasa ${L.editUndo} bilan orqaga qaytaring yoki 🛠 Tahrirlash → ${L.editDelete} bilan o'chiring.`,
+    ]
+      .filter((row) => row.length > 0)
+      .join("\n"),
+    reply([[L.writeUndo], [L.cardEdit], [L.backBooks]]),
+  );
 }
 
 /** «✍️ Matn kiritish»: daftar ro'yxatini ko'rsatadi (yoki yaratishni taklif qiladi). */
@@ -1309,6 +1746,959 @@ async function sendNotebookBook(chatId: number, notebook: Notebook): Promise<voi
 }
 
 /* ------------------------------------------------------------------ */
+/* Yozish joyi: qaysi betning qaysi qatoridan yozamiz                 */
+/* ------------------------------------------------------------------ */
+
+/** Bet matnini joriy uslub bilan o'lchaydi (qatorlar, bo'sh joy). */
+async function measureSide(chatId: number, sideIndex: number, text: string): Promise<SideTextMeasure> {
+  const style = sideStyle(chatId, sideIndex);
+  const linesPerPage = linesPerPageFor(style.pageFormat, style.lineGap);
+  const fonts = await fontsFor(style);
+  const primaryId = fonts[style.font] ? style.font : FALLBACK_FONT_ID;
+  const bytes = fonts[primaryId];
+  if (!bytes) {
+    return { lines: [], words: wordsOf(text), linesPerPage, pages: 0, freeLines: linesPerPage };
+  }
+  const primary = parseFont(primaryId, bytes);
+  const secondary =
+    primaryId !== FALLBACK_FONT_ID && fonts[FALLBACK_FONT_ID]
+      ? parseFont(FALLBACK_FONT_ID, fonts[FALLBACK_FONT_ID])
+      : undefined;
+  return measureSideText({
+    text,
+    style,
+    primary,
+    secondary,
+    sizeScale: fontEntry(primaryId)?.sizeScale ?? 1,
+  });
+}
+
+/** Betdagi joyni odam o'qiydigan ko'rinishda yozadi. */
+function sidePositionText(measure: SideTextMeasure, sideIndex: number): string {
+  const sheet = Math.floor(sideIndex / 2) + 1;
+  return `📄 ${sideIndex + 1}-bet (${sheet}-varaq, ${sideLabel(sideIndex)}): ${measure.lines.length} qator band, ${measure.freeLines} qator bo'sh`;
+}
+
+/** Yozish oqimining tugmalari (bosqichga qarab). */
+function writeKeyboard(chatId: number): TgMarkup {
+  const flow = rawSettings(chatId).writeFlow;
+  if (!flow) return mainKeyboard();
+  if (flow.stage === "position") {
+    return reply([[L.writeContinue], [L.writePickLine, L.writeNewSide], [L.backBooks]]);
+  }
+  if (flow.stage === "skip") {
+    return reply([
+      ["⏭ 0", "⏭ 1", "⏭ 2"],
+      ["⏭ 3", "⏭ 5"],
+      [L.deleteCancel],
+    ]);
+  }
+  if (flow.stage === "line") {
+    const rows: string[][] = [];
+    for (const label of rawSettings(chatId).lineButtons ?? []) rows.push([label]);
+    rows.push([L.deleteCancel]);
+    return reply(rows);
+  }
+  return reply([[L.deleteCancel], [L.backBooks]]);
+}
+
+/**
+ * Yozish joyini tanlashni boshlaydi: oxirgi yozilgan joyni ko'rsatadi, betdagi
+ * bo'sh qatorlarni sanaydi va qayerdan yozishni so'raydi.
+ */
+async function openWriteSession(chatId: number, notebook: Notebook, store: NotebookStore): Promise<void> {
+  const usedSides = store.usedSides(notebook);
+  const lastSide = usedSides - 1;
+  const lastMeasure = lastSide >= 0 ? await measureSide(chatId, lastSide, notebook.sides[lastSide].text) : undefined;
+  const startNewSide = usedSides === 0 || !lastMeasure || lastMeasure.freeLines <= 0;
+  const sideIndex = startNewSide ? usedSides : lastSide;
+  const line = startNewSide ? 1 : (lastMeasure as SideTextMeasure).lines.length + 1;
+
+  await updateSettings(chatId, {
+    notebookId: notebook.id,
+    menu: "main",
+    deleteFlow: undefined,
+    writeFlow: { notebookId: notebook.id, sideIndex, line, stage: "position" },
+  });
+
+  const lines = [
+    `✍️ «${notebook.title}» — qayerdan yozamiz?`,
+    "",
+    usedSides === 0
+      ? "Bu daftarda hali yozilgan bet yo'q — birinchi betdan boshlaymiz."
+      : `Shu paytgacha ${usedSides} bet yozilgan. Oxirgi yozuv: ${lastSide + 1}-bet, ${lastMeasure?.lines.length ?? 0}-qatorda tugagan.`,
+    lastMeasure ? sidePositionText(lastMeasure, lastSide) : "",
+    "",
+    "Kerakli joyni tanlang:",
+    `${L.writeContinue} — ${line}-qatordan davom etadi (${lastMeasure?.freeLines ?? 0} qator bo'sh).`,
+    startNewSide ? `${L.writeNewSide} — hozir yangi bet ochiladi.` : `${L.writeNewSide} — keyingi betning 1-qatoridan.`,
+    `${L.writePickLine} — shu betdagi bo'sh qatorlardan birini tanlaysiz.`,
+  ].filter((row) => row.length > 0);
+
+  await sendMessage(chatId, lines.join("\n"), writeKeyboard(chatId));
+}
+
+/** Qator tanlangach (yoki davom etishdan keyin) nechta qator tashlashni so'raydi. */
+async function askSkipLines(chatId: number): Promise<void> {
+  const flow = rawSettings(chatId).writeFlow;
+  if (!flow) return;
+  await updateSettings(chatId, { writeFlow: { ...flow, line: flow.line ?? 1, stage: "skip" } });
+  await sendMessage(
+    chatId,
+    [
+      "⏭ Nechta qator tashlab ketamiz?",
+      "",
+      `Yozish ${flow.line ?? 1}-qatordan boshlanadi. Agar avval bir nechta qator bo'sh`,
+      "qolishini xohlasangiz, sonni tanlang (masalan ⏭ 2 — ikki qator tashlanadi).",
+    ].join("\n"),
+    writeKeyboard(chatId),
+  );
+}
+
+/** Yozish joyini tanlash oqimini yakunlaydi (matn kutiladi). */
+async function finishWritePosition(chatId: number): Promise<void> {
+  const flow = rawSettings(chatId).writeFlow;
+  if (!flow) return;
+  await updateSettings(chatId, { writeFlow: { ...flow, stage: "ready" } });
+  await sendMessage(
+    chatId,
+    [
+      "✅ Tayyor!",
+      "",
+      `Yozish ${flow.sideIndex + 1}-betning ${flow.line ?? 1}-qatoridan boshlanadi.`,
+      "Endi matn yuboring — uni shu joydan boshlab yozaman.",
+    ].join("\n"),
+    writeKeyboard(chatId),
+  );
+}
+
+/** Bo'sh qatorlardan birini tanlashni so'raydi (yozish oqimi). */
+async function askWriteLine(chatId: number): Promise<void> {
+  const flow = rawSettings(chatId).writeFlow;
+  if (!flow) return;
+  const store = await books();
+  const notebook = store.get(flow.notebookId);
+  if (!notebook || notebook.chatId !== chatId) {
+    await updateSettings(chatId, { writeFlow: undefined });
+    await sendMessage(chatId, "Daftar topilmadi — 📚 Daftarlar bo'limidan qayta tanlang.", mainKeyboard());
+    return;
+  }
+
+  const measure = await measureSide(chatId, flow.sideIndex, notebook.sides[flow.sideIndex]?.text ?? "");
+  const firstFree = Math.min(measure.linesPerPage, measure.lines.length + 1);
+  await updateSettings(chatId, {
+    lineButtons: lineButtonsFor(firstFree, measure.linesPerPage),
+    writeFlow: { ...flow, stage: "line" },
+  });
+  await sendMessage(
+    chatId,
+    [
+      `🔢 ${flow.sideIndex + 1}-bet — qatorni tanlang`,
+      "",
+      measure.lines.length > 0
+        ? `Tepadan sanaganda ${measure.lines.length} qator band, oxirgi yozuv ${measure.lines.length}-qatorda tugagan.`
+        : "Bu bet hali bo'sh.",
+      `Bo'sh qatorlar: ${firstFree}..${measure.linesPerPage} (jami ${measure.freeLines} qator toza turibdi).`,
+      "",
+      "Qaysi qatordan yozamiz? Raqamni tanlang (yoki raqamni yozib yuboring).",
+    ].join("\n"),
+    writeKeyboard(chatId),
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Yozuvni o'chirish va orqaga qaytarish                               */
+/* ------------------------------------------------------------------ */
+
+/** Bet/qator/so'z joyini o'qish uchun matn ko'rinishi. */
+function pointText(point: SidePoint): string {
+  return `${point.side + 1}-betning ${point.line}-qatorining ${point.word}-so'zi`;
+}
+
+/** Yozilgan betlarni «slayd» qilib yuboradi va bet tugmalarini qaytaradi. */
+async function sendSideSlides(chatId: number, notebook: Notebook, intro: string): Promise<void> {
+  const filled = notebook.sides
+    .map((side, index) => ({ side, index }))
+    .filter((entry) => entry.side.text.trim().length > 0);
+
+  for (const entry of filled.slice(0, 6)) await sendSide(chatId, notebook, entry.index);
+
+  const rows: string[][] = [];
+  const map: Record<string, number> = {};
+  for (const entry of filled.slice(0, 8)) {
+    const measure = await measureSide(chatId, entry.index, entry.side.text);
+    const label = `📄 ${entry.index + 1}-bet • ${measure.lines.length} qator`;
+    map[label] = entry.index;
+    rows.push([label]);
+  }
+  rows.push([L.deleteCancel]);
+  await updateSettings(chatId, { sideButtons: map });
+  await sendMessage(
+    chatId,
+    [intro, "", `Yozilgan betlar: ${filled.length} ta. Betni tanlang:`].join("\n"),
+    reply(rows),
+  );
+}
+
+/** Qator raqamlari tugmalarini tayyorlaydi (ko'pi bilan 12 ta, keyin raqam yoziladi). */
+function lineButtonsFor(from: number, to: number): string[] {
+  const labels: string[] = [];
+  for (let line = from; line <= to && labels.length < 12; line += 1) labels.push(String(line));
+  return labels;
+}
+
+/** O'chirish oqimining tugmalari (bosqichga qarab). */
+function deleteKeyboard(chatId: number): TgMarkup {
+  const flow = rawSettings(chatId).deleteFlow;
+  if (!flow) return mainKeyboard();
+  const settings = rawSettings(chatId);
+  if (flow.stage === "confirm") return reply([[L.deleteConfirm], [L.deleteCancel]]);
+  if (flow.stage === "startLine" || flow.stage === "endLine" || flow.stage === "startWord" || flow.stage === "endWord") {
+    const rows: string[][] = [];
+    const labels = settings.numberButtons ?? [];
+    for (let index = 0; index < labels.length; index += 4) rows.push(labels.slice(index, index + 4));
+    rows.push([L.deleteCancel]);
+    return reply(rows);
+  }
+  const rows: string[][] = [];
+  for (const label of Object.keys(settings.sideButtons ?? {})) rows.push([label]);
+  rows.push([L.deleteCancel]);
+  return reply(rows);
+}
+
+/** O'chirish oqimini boshlaydi: yozilgan betlar «slayd» qilib ko'rsatiladi. */
+async function startDeleteFlow(chatId: number, notebook: Notebook): Promise<void> {
+  const store = await books();
+  const filled = store.usedSides(notebook) > 0 && notebook.sides.some((side) => side.text.trim().length > 0);
+  if (!filled) {
+    await sendMessage(chatId, "Bu daftarda hali yozilgan bet yo'q — o'chiradigan yozuv ham yo'q.", cardKeyboard());
+    return;
+  }
+  await updateSettings(chatId, {
+    menu: "edit",
+    cardId: notebook.id,
+    writeFlow: undefined,
+    deleteFlow: { notebookId: notebook.id, stage: "side" },
+  });
+  await sendSideSlides(
+    chatId,
+    notebook,
+    [
+      "✂️ Yozuvni o'chirish",
+      "",
+      "O'chirish boshlanadigan betni tanlang. Betlar rasmlari tepada yuborildi.",
+    ].join("\n"),
+  );
+}
+
+/** Qator raqamlari so'raladi (o'chirish oqimi). `from` — eng kichik tanlanadigan qator. */
+async function askDeleteLine(chatId: number, side: number, from = 1): Promise<void> {
+  const store = await books();
+  const flow = rawSettings(chatId).deleteFlow;
+  const notebook = flow ? store.get(flow.notebookId) : undefined;
+  if (!flow || !notebook) return;
+  const measure = await measureSide(chatId, side, notebook.sides[side]?.text ?? "");
+  const labels = lineButtonsFor(Math.max(1, from), measure.lines.length);
+  await updateSettings(chatId, { numberButtons: labels });
+  await sendMessage(
+    chatId,
+    [
+      `📄 ${side + 1}-bet — qatorlar: ${measure.lines.length}`,
+      "",
+      ...measure.lines.slice(0, 12).map((line) => `${line.index}-qator: ${line.words.slice(0, 8).join(" ")}${line.words.length > 8 ? " …" : ""}`),
+      measure.lines.length > 12 ? "…" : "",
+      "",
+      "O'chirish boshlanadigan qatorning raqamini tanlang (yoki raqamni yozib yuboring).",
+    ]
+      .filter((row) => row.length > 0)
+      .join("\n"),
+    deleteKeyboard(chatId),
+  );
+}
+
+/** Qatordagi so'zlar raqamlari so'raladi (o'chirish oqimining boshlanishi). */
+async function askDeleteWord(chatId: number, side: number, line: number, fromWord: number): Promise<void> {
+  const store = await books();
+  const flow = rawSettings(chatId).deleteFlow;
+  const notebook = flow ? store.get(flow.notebookId) : undefined;
+  if (!flow || !notebook) return;
+  const measure = await measureSide(chatId, side, notebook.sides[side]?.text ?? "");
+  const target = measure.lines[line - 1];
+  const labels = (target?.words ?? [])
+    .map((_, index) => index + 1)
+    .filter((index) => index >= fromWord)
+    .slice(0, 12)
+    .map(String);
+  await updateSettings(chatId, { numberButtons: labels });
+  await sendMessage(
+    chatId,
+    [
+      `🔢 ${side + 1}-betning ${line}-qatoridagi so'zlar:`,
+      "",
+      ...(target?.words ?? []).map((word, index) => `${index + 1}) ${word}`),
+      "",
+      "Nechinchi so'zdan boshlab o'chiramiz? Tanlangan so'z ham o'chiriladi (o'z ichiga olinadi).",
+    ].join("\n"),
+    deleteKeyboard(chatId),
+  );
+}
+
+/** O'chirish oraliģi tasdiqlashga tayyor bo'lganda ko'rsatiladigan matn. */
+async function askDeleteConfirm(chatId: number): Promise<void> {
+  const store = await books();
+  const flow = rawSettings(chatId).deleteFlow;
+  const notebook = flow ? store.get(flow.notebookId) : undefined;
+  if (!flow?.start || !flow.end || !notebook) return;
+
+  const preview: string[] = [];
+  let count = 0;
+  for (let side = flow.start.side; side <= flow.end.side; side += 1) {
+    const measure = await measureSide(chatId, side, notebook.sides[side]?.text ?? "");
+    const from = side === flow.start.side ? (measure.lines[flow.start.line - 1]?.wordStart ?? 0) + flow.start.word - 1 : 0;
+    const to = side === flow.end.side
+      ? (measure.lines[flow.end.line - 1]?.wordStart ?? 0) + flow.end.word - 1
+      : measure.words.length - 1;
+    const slice = measure.words.slice(Math.max(0, from), Math.max(0, to) + 1);
+    count += slice.length;
+    preview.push(...slice);
+  }
+
+  await updateSettings(chatId, {
+    deleteFlow: { ...flow, stage: "confirm" },
+    numberButtons: undefined,
+  });
+  await sendMessage(
+    chatId,
+    [
+      "❓ O'chirishni tasdiqlaysizmi?",
+      "",
+      `${pointText(flow.start)}dan ${pointText(flow.end)}gacha o'chiriladi.`,
+      `Jami ${count} ta so'z.`,
+      preview.length > 0 ? `\nO'chiriladigan so'zlar: «${preview.slice(0, 24).join(" ")}${preview.length > 24 ? " …" : ""}»` : "",
+      "",
+      `Tasdiqlasangiz ${L.deleteConfirm} tugmasini bosing.`,
+    ]
+      .filter((row) => row.length > 0)
+      .join("\n"),
+    deleteKeyboard(chatId),
+  );
+}
+
+/** Tanlangan oraliqdagi so'zlarni o'chiradi va o'zgargan betlarni yuboradi. */
+async function performDelete(chatId: number): Promise<void> {
+  const store = await books();
+  const flow = rawSettings(chatId).deleteFlow;
+  const notebook = flow ? store.get(flow.notebookId) : undefined;
+  if (!flow?.start || !flow.end || !notebook || notebook.chatId !== chatId) {
+    await updateSettings(chatId, { deleteFlow: undefined });
+    await sendMessage(chatId, "O'chirish bekor qilindi.", mainKeyboard());
+    return;
+  }
+
+  const changes: { index: number; text: string }[] = [];
+  let removed = 0;
+  for (let side = flow.start.side; side <= flow.end.side; side += 1) {
+    const text = notebook.sides[side]?.text ?? "";
+    if (text.trim().length === 0) continue;
+    const measure = await measureSide(chatId, side, text);
+    const from = side === flow.start.side ? (measure.lines[flow.start.line - 1]?.wordStart ?? 0) + flow.start.word - 1 : 0;
+    const to =
+      side === flow.end.side
+        ? (measure.lines[flow.end.line - 1]?.wordStart ?? 0) + flow.end.word - 1
+        : measure.words.length - 1;
+    const clampedFrom = Math.max(0, Math.min(from, measure.words.length - 1));
+    const clampedTo = Math.max(clampedFrom, Math.min(to, measure.words.length - 1));
+    const result = deleteWordRange(text, clampedFrom, clampedTo);
+    removed += clampedTo - clampedFrom + 1;
+    changes.push({ index: side, text: result.text });
+  }
+
+  if (changes.length === 0) {
+    await updateSettings(chatId, { deleteFlow: undefined });
+    await sendMessage(chatId, "O'chirish uchun so'z topilmadi.", cardKeyboard());
+    return;
+  }
+
+  await store.applySides(notebook.id, changes, "o'chirish");
+  const updated = store.get(notebook.id) as Notebook;
+  await updateSettings(chatId, { deleteFlow: undefined, menu: "books", cardId: notebook.id });
+  await sendMessage(
+    chatId,
+    [
+      `🗑 O'chirildi: ${removed} ta so'z.`,
+      `${pointText(flow.start)} — ${pointText(flow.end)}`,
+      "",
+      `Xato bo'lsa ${L.editUndo} tugmasi bilan qaytarishingiz mumkin.`,
+      "Tahrirlangan betlar quyida:",
+    ].join("\n"),
+    reply([[L.editUndo], [L.backBooks]]),
+  );
+  for (const change of changes) await sendSide(chatId, updated, change.index);
+}
+
+/** Oxirgi tahrir amalini orqaga qaytaradi (yozuv yoki o'chirish). */
+async function undoLastEdit(chatId: number, notebookId: string): Promise<void> {
+  const store = await books();
+  const notebook = store.get(notebookId);
+  if (!notebook || notebook.chatId !== chatId) {
+    await sendMessage(chatId, "Daftar topilmadi — 📚 Daftarlar bo'limidan qayta urinib ko'ring.", mainKeyboard());
+    return;
+  }
+
+  const edit = await store.undo(notebookId);
+  if (!edit) {
+    await sendMessage(chatId, "Orqaga qaytarish uchun tahrir amali yo'q.", cardKeyboard());
+    return;
+  }
+
+  const updated = store.get(notebookId) as Notebook;
+  await sendMessage(
+    chatId,
+    [
+      `↩️ «${edit.label}» amali orqaga qaytarildi — daftar avvalgi holatiga keldi.`,
+      "",
+      "Betlar qayta chizildi:",
+    ].join("\n"),
+    reply([[L.backBooks]]),
+  );
+  for (const entry of edit.before) await sendSide(chatId, updated, entry.index);
+}
+
+/** Daftar tahrirlash menyusi. */
+async function openEditMenu(chatId: number, notebook: Notebook): Promise<void> {
+  const store = await books();
+  const last = store.lastEdit(notebook.id);
+  await updateSettings(chatId, { menu: "edit", cardId: notebook.id });
+  await sendMessage(
+    chatId,
+    [
+      `🛠 «${notebook.title}» — tahrirlash`,
+      "",
+      `${L.editDelete} — betdagi qator va so'zlar bo'yicha oraliqni o'chiradi.`,
+      `${L.editUndo} — oxirgi yozuv yoki o'chirishni bekor qiladi.`,
+      `${L.cardRename} — daftar nomini almashtiradi.`,
+      "",
+      last ? `Oxirgi amal: «${last.label}».` : "Hozircha tahrir amali bajarilmagan.",
+    ].join("\n"),
+    reply([[L.editDelete], [L.editUndo], [L.cardRename], [L.backBooks]]),
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Yozish/o'chirish oqimining tugmalarini bajarish                     */
+/* ------------------------------------------------------------------ */
+
+/** O'chirish oqimini bekor qiladi. */
+async function cancelDeleteFlow(chatId: number): Promise<void> {
+  await updateSettings(chatId, { deleteFlow: undefined, numberButtons: undefined, sideButtons: undefined });
+  await sendMessage(chatId, "❌ O'chirish bekor qilindi.", cardKeyboard());
+}
+
+/** O'chirish oqimida bet tanlandi (avval boshlanish, keyin tugash beti). */
+async function pickDeleteSide(chatId: number, side: number): Promise<void> {
+  const store = await books();
+  const flow = rawSettings(chatId).deleteFlow;
+  const notebook = flow ? store.get(flow.notebookId) : undefined;
+  if (!flow || !notebook) {
+    await cancelDeleteFlow(chatId);
+    return;
+  }
+
+  const measure = await measureSide(chatId, side, notebook.sides[side]?.text ?? "");
+  if (measure.lines.length === 0) {
+    await sendMessage(chatId, `${side + 1}-betda yozuv yo'q — boshqa betni tanlang.`, deleteKeyboard(chatId));
+    return;
+  }
+
+  if (flow.stage === "side") {
+    // O'chirish shu betdan boshlanadi; qatorni tanlashga o'tamiz.
+    await updateSettings(chatId, {
+      deleteFlow: { ...flow, start: { side, line: 1, word: 1 }, stage: "startLine" },
+      numberButtons: undefined,
+    });
+    await askDeleteLine(chatId, side, 1);
+    return;
+  }
+
+  if (flow.stage === "endSide") {
+    const start = flow.start;
+    if (!start || side < start.side) {
+      await sendMessage(
+        chatId,
+        "Tugash joyi boshlanishidan oldin bo'lishi mumkin emas — qaytadan tanlang.",
+        deleteKeyboard(chatId),
+      );
+      return;
+    }
+    await updateSettings(chatId, {
+      deleteFlow: { ...flow, end: { side, line: start.side === side ? start.line : 1, word: 1 }, stage: "endLine" },
+      numberButtons: undefined,
+    });
+    await askDeleteLine(chatId, side, start.side === side ? start.line : 1);
+    return;
+  }
+}
+
+/** O'chirish oqimida boshlanish qatori tanlandi. */
+async function pickDeleteStartLine(chatId: number, line: number): Promise<void> {
+  const store = await books();
+  const flow = rawSettings(chatId).deleteFlow;
+  const notebook = flow ? store.get(flow.notebookId) : undefined;
+  if (!flow?.start || !notebook) return;
+  const measure = await measureSide(chatId, flow.start.side, notebook.sides[flow.start.side]?.text ?? "");
+  if (!measure.lines[line - 1]) {
+    await askDeleteLine(chatId, flow.start.side, line);
+    return;
+  }
+  await updateSettings(chatId, {
+    deleteFlow: { ...flow, start: { ...flow.start, line, word: 1 }, stage: "startWord" },
+  });
+  await askDeleteWord(chatId, flow.start.side, line, 1);
+}
+
+/** O'chirish oqimida boshlanish so'zi tanlandi: endi tugash joyi so'raladi. */
+async function pickDeleteStartWord(chatId: number, word: number): Promise<void> {
+  const store = await books();
+  const flow = rawSettings(chatId).deleteFlow;
+  const notebook = flow ? store.get(flow.notebookId) : undefined;
+  if (!flow?.start || !notebook) return;
+  const measure = await measureSide(chatId, flow.start.side, notebook.sides[flow.start.side]?.text ?? "");
+  const line = measure.lines[flow.start.line - 1];
+  if (!line || !line.words[word - 1]) {
+    await askDeleteWord(chatId, flow.start.side, flow.start.line, 1);
+    return;
+  }
+
+  await updateSettings(chatId, {
+    deleteFlow: { ...flow, start: { ...flow.start, word }, stage: "endSide" },
+  });
+  await sendSideSlides(
+    chatId,
+    notebook,
+    [
+      "🔚 Saqlandi!",
+      "",
+      `Boshlanish: ${pointText({ ...flow.start, word })}.`,
+      "Endi qayergacha o'chirishni tanlang — betlar yana ko'rsatildi.",
+    ].join("\n"),
+  );
+}
+
+/** O'chirish oqimida tugash qatori tanlandi. */
+async function pickDeleteEndLine(chatId: number, line: number): Promise<void> {
+  const store = await books();
+  const flow = rawSettings(chatId).deleteFlow;
+  const notebook = flow ? store.get(flow.notebookId) : undefined;
+  if (!flow?.end || !notebook || !flow.start) return;
+  const side = flow.end.side;
+  const measure = await measureSide(chatId, side, notebook.sides[side]?.text ?? "");
+  if (!measure.lines[line - 1] || (side === flow.start.side && line < flow.start.line)) {
+    await askDeleteLine(chatId, side, side === flow.start.side ? flow.start.line : 1);
+    return;
+  }
+  const fromWord = side === flow.start.side && line === flow.start.line ? flow.start.word : 1;
+  await updateSettings(chatId, {
+    deleteFlow: { ...flow, end: { ...flow.end, line, word: fromWord }, stage: "endWord" },
+  });
+  await askDeleteWord(chatId, side, line, fromWord);
+}
+
+/** O'chirish oqimida tugash so'zi tanlandi: tasdiqlashga o'tamiz. */
+async function pickDeleteEndWord(chatId: number, word: number): Promise<void> {
+  const store = await books();
+  const flow = rawSettings(chatId).deleteFlow;
+  const notebook = flow ? store.get(flow.notebookId) : undefined;
+  if (!flow?.end || !flow.start || !notebook) return;
+  const measure = await measureSide(chatId, flow.end.side, notebook.sides[flow.end.side]?.text ?? "");
+  const line = measure.lines[flow.end.line - 1];
+  if (!line || !line.words[word - 1]) {
+    await askDeleteWord(chatId, flow.end.side, flow.end.line, flow.end.word);
+    return;
+  }
+  await updateSettings(chatId, { deleteFlow: { ...flow, end: { ...flow.end, word } } });
+  await askDeleteConfirm(chatId);
+}
+
+/**
+ * Yozish joyi va tahrirlash tugmalarini bajaradi.
+ * `true` qaytsa — tugma shu oqimga tegishli edi (boshqa menyu ochilmaydi).
+ */
+async function handleEditFlowLabel(chatId: number, label: string): Promise<boolean> {
+  const settings = rawSettings(chatId);
+  const un = unmark(label);
+  const store = await books();
+  const card = settings.cardId ? store.get(settings.cardId) : undefined;
+  const cardOk = card && card.chatId === chatId ? card : undefined;
+
+  // Tahrirlash menyusi (karta ochiq bo'lmasa — ochiq daftar bo'yicha).
+  const editTarget = cardOk ?? (settings.notebookId ? store.get(settings.notebookId) : undefined);
+  if (un === L.cardEdit) {
+    if (editTarget) {
+      await openEditMenu(chatId, editTarget);
+      return true;
+    }
+    await openMenu(chatId, "books");
+    return true;
+  }
+  if (un === L.editDelete) {
+    const notebook = cardOk ?? (settings.notebookId ? store.get(settings.notebookId) : undefined);
+    if (notebook) {
+      await startDeleteFlow(chatId, notebook);
+      return true;
+    }
+  }
+  if (un === L.editUndo || un === L.writeUndo) {
+    if (editTarget) {
+      await undoLastEdit(chatId, editTarget.id);
+      return true;
+    }
+    await sendMessage(chatId, "Avval daftar tanlang — 📚 Daftarlar bo'limidan daftar kartasini oching.", mainKeyboard());
+    return true;
+  }
+
+  // Yozish oqimi tugmalari.
+  if (settings.writeFlow) {
+    const flow = settings.writeFlow;
+    const notebook = store.get(flow.notebookId);
+    if (!notebook || notebook.chatId !== chatId) {
+      await updateSettings(chatId, { writeFlow: undefined });
+      await sendMessage(chatId, "Daftar topilmadi — 📚 Daftarlar bo'limidan qayta tanlang.", mainKeyboard());
+      return true;
+    }
+
+    if (un === L.deleteCancel) {
+      // Joy tanlashni tashlab, daftar kartasiga qaytamiz (matn yozib yuborilmaydi).
+      await updateSettings(chatId, { writeFlow: undefined, lineButtons: undefined });
+      await sendMessage(chatId, "❌ Joy tanlash bekor qilindi — daftar kartasi ochiq.", cardKeyboard());
+      return true;
+    }
+
+    if (un === L.writePickLine) {
+      await askWriteLine(chatId);
+      return true;
+    }
+
+    if (un === L.writeNewSide) {
+      const sideIndex = store.usedSides(notebook);
+      if (sideIndex >= store.capacity(notebook)) {
+        await updateSettings(chatId, { writeFlow: undefined, menu: "newbook" });
+        await sendMessage(chatId, "📕 Bu daftar to'ldi — ➕ Yangi daftar yaratishingiz mumkin.", newBookKeyboard());
+        return true;
+      }
+      await updateSettings(chatId, { writeFlow: { ...flow, sideIndex, line: 1 } });
+      await askSkipLines(chatId);
+      return true;
+    }
+
+    if (un === L.writeContinue) {
+      await askSkipLines(chatId);
+      return true;
+    }
+
+    if (flow.stage === "line" && /^\d+$/.test(un)) {
+      const line = Number.parseInt(un, 10);
+      const measure = await measureSide(chatId, flow.sideIndex, notebook.sides[flow.sideIndex]?.text ?? "");
+      if (line < 1 || line > measure.linesPerPage) {
+        await askWriteLine(chatId);
+        return true;
+      }
+      await updateSettings(chatId, { writeFlow: { ...flow, line, stage: "skip" } });
+      await askSkipLines(chatId);
+      return true;
+    }
+
+    if (flow.stage === "skip") {
+      const skipMatch = /^(?:⏭\s*)?(\d+)$/.exec(un);
+      if (skipMatch) {
+        const skip = Number.parseInt(skipMatch[1], 10);
+        await updateSettings(chatId, { writeFlow: { ...flow, line: (flow.line ?? 1) + skip } });
+        await finishWritePosition(chatId);
+        return true;
+      }
+    }
+  }
+
+  // O'chirish oqimi tugmalari.
+  if (settings.deleteFlow) {
+    const flow = settings.deleteFlow;
+    if (un === L.deleteCancel) {
+      await cancelDeleteFlow(chatId);
+      return true;
+    }
+    if (un === L.deleteConfirm) {
+      await performDelete(chatId);
+      return true;
+    }
+
+    const sideIndex = settings.sideButtons?.[label] ?? settings.sideButtons?.[un];
+    if (sideIndex !== undefined && (flow.stage === "side" || flow.stage === "endSide")) {
+      await pickDeleteSide(chatId, sideIndex);
+      return true;
+    }
+
+    if (/^\d+$/.test(un)) {
+      const value = Number.parseInt(un, 10);
+      if (flow.stage === "startLine") {
+        await pickDeleteStartLine(chatId, value);
+        return true;
+      }
+      if (flow.stage === "startWord") {
+        await pickDeleteStartWord(chatId, value);
+        return true;
+      }
+      if (flow.stage === "endLine") {
+        await pickDeleteEndLine(chatId, value);
+        return true;
+      }
+      if (flow.stage === "endWord") {
+        await pickDeleteEndWord(chatId, value);
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Uslubimni nusxalash: namuna olish oqimi                            */
+/* ------------------------------------------------------------------ */
+
+/** Telegram'dagi eng katta rasm o'lchamining file_id'si. */
+function largestPhotoId(message: TgMessage): string | undefined {
+  const photos = message.photo ?? [];
+  return photos[photos.length - 1]?.file_id;
+}
+
+/** Telegram serveridagi faylni yuklab oladi (rasm namunalari uchun). */
+async function downloadTelegramFile(fileId: string): Promise<Uint8Array> {
+  const file = await tg<{ file_path?: string }>("getFile", { file_id: fileId });
+  const path = file?.file_path;
+  if (!path) throw new Error("Telegram fayl yo'lini qaytarmadi.");
+
+  const token = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
+  const root = process.env.TELEGRAM_API_BASE?.trim().replace(/\/+$/, "") || "https://api.telegram.org";
+  const response = await fetch(`${root}/file/bot${token}/${path}`);
+  if (!response.ok) throw new Error(`fayl yuklanmadi (HTTP ${response.status})`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+/** Namuna olishni boshlaydi: 1-qadam (so'zlar) ko'rsatmasi yuboriladi. */
+async function startStyleSample(chatId: number): Promise<void> {
+  const store = await styles();
+  const saved = store.list(chatId);
+  if (saved.length >= MAX_STYLES_PER_CHAT) {
+    await sendMessage(
+      chatId,
+      [
+        `Sizda allaqachon ${saved.length} ta uslub bor (ko'pi bilan ${MAX_STYLES_PER_CHAT} ta).`,
+        "",
+        `Yangi namuna olish uchun keraksiz uslubni ${L.styleDelete} tugmasi bilan o'chiring.`,
+      ].join("\n"),
+      styleKeyboard(chatId),
+    );
+    return;
+  }
+
+  await updateSettings(chatId, {
+    menu: "style",
+    styleStep: "words",
+    styleWords: undefined,
+    styleDraft: undefined,
+    pending: undefined,
+  });
+  await sendMessage(chatId, styleWordsText(), styleKeyboard(chatId));
+}
+
+/**
+ * Namunani o'lchab, eng yaqin shriftni tanlaydi va uslubga nom so'raydi.
+ *
+ * Bu yerda har bir nomzod shrift bilan namuna matni chizilib, xuddi
+ * foydalanuvchi surati kabi o'lchanadi (`calibrateStyle`) — shuning uchun
+ * jarayon bir necha soniya davom etadi va holat xabari yangilanib turadi.
+ */
+async function measureStyleSample(
+  chatId: number,
+  words: SampleProfile,
+  digits: SampleProfile | null,
+): Promise<void> {
+  const profile = mergeProfiles(words, digits);
+  const fontIds = FONT_LIBRARY.map((entry) => entry.id);
+  const fonts = await loadFonts([...fontIds, FALLBACK_FONT_ID]);
+  const available = fontIds.filter((id) => Boolean(fonts[id]));
+  if (available.length === 0) {
+    await sendMessage(chatId, "Kechirasiz, shrift fayllari topilmadi — botni qayta ishga tushirish kerak. 🙏");
+    return;
+  }
+
+  const statusId = await sendMessage(chatId, "🧠 Yozuvingiz o'lchanmoqda...");
+  await tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => undefined);
+
+  const calibration = await calibrateStyle({
+    profile,
+    fonts,
+    candidateIds: available,
+    onProgress: async (done, total) => {
+      if (statusId && (done % 6 === 0 || done === total)) {
+        await editMessage(chatId, statusId, `🧠 Yozuvingiz o'lchanmoqda... ${done}/${total} shrift tekshirildi`);
+      }
+    },
+  });
+
+  const draft: StyleDraft = {
+    baseFont: calibration.baseFont,
+    personal: calibration.personal,
+    summary: personalSummary(calibration.personal),
+  };
+  await updateSettings(chatId, {
+    menu: "style",
+    styleStep: undefined,
+    styleWords: undefined,
+    styleDraft: draft,
+    pending: { kind: "styleName" },
+  });
+
+  await sendMessage(
+    chatId,
+    [
+      "✅ Namunangiz o'lchandi!",
+      "",
+      `• Eng yaqin qo'lyozma: ${displayName(calibration.baseFont)}`,
+      `• Sizning xususiyatlaringiz: ${draft.summary || "o'rtacha yozuv"}`,
+      `• O'lchangan satrlar: ${profile.lines}`,
+      digits ? "• Raqamlar namunasi ham hisobga olindi" : "• Raqamlar namunasisiz (so'zlar asosida)",
+      "",
+      "✏️ Endi uslubga nom bering — keyingi xabaringiz nom bo'ladi (masalan «Mening yozuvim»).",
+      `Nom kerak bo'lmasa ${L.skipName} tugmasini bosing.`,
+    ].join("\n"),
+    reply([[L.skipName], [L.styleCancel]]),
+  );
+}
+
+/** Nom berilgach (yoki nomsiz) uslubni bazaga saqlaydi va yoqadi. */
+async function saveStyle(chatId: number, name?: string): Promise<void> {
+  const draft = rawSettings(chatId).styleDraft;
+  if (!draft) {
+    await openMenu(chatId, "style");
+    return;
+  }
+
+  const store = await styles();
+  const list = store.list(chatId);
+  const wanted = (name ? cleanStyleName(name) : null) ?? defaultStyleName(list);
+  const record = await store.create({
+    chatId,
+    name: uniqueStyleName(list, wanted),
+    baseFont: draft.baseFont,
+    personal: draft.personal,
+    summary: draft.summary,
+  });
+
+  await updateSettings(chatId, {
+    styleDraft: undefined,
+    styleWords: undefined,
+    styleStep: undefined,
+    pending: undefined,
+    styleId: record.id,
+    menu: "style",
+  });
+
+  await sendMessage(
+    chatId,
+    [
+      `✅ «${record.name}» uslubi saqlandi va yoqildi.`,
+      `• Asos: ${displayName(record.baseFont)}`,
+      record.summary ? `• ${record.summary}` : "",
+      "",
+      "Endi yuborgan matningiz shu uslubda — ya'ni sizning qo'lyozmangizga moslab chiziladi.",
+      "Uslub faqat sizga ko'rinadi: boshqa foydalanuvchilar uni ko'rmaydi.",
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n"),
+    styleKeyboard(chatId),
+  );
+}
+
+/**
+ * Namunaviy rasmni qabul qiladi: yuklab oladi, o'lchaydi va keyingi qadamga
+ * o'tadi. Oqim boshlanmagan bo'lsa (masalan, rasm kutilmayotganda) shunchaki
+ * yo'l-yo'riq yuboriladi.
+ */
+async function handleStyleSample(chatId: number, fileId: string): Promise<void> {
+  const step = rawSettings(chatId).styleStep;
+  // Faqat namuna qadamlari rasm qabul qiladi; o'chirish tanlovi yoki bo'sh
+  // holatda kelgan surat shunchaki yo'l-yo'riq bilan javoblanadi.
+  if (step !== "words" && step !== "digits") {
+    await sendMessage(
+      chatId,
+      [
+        "📷 Rasm qabul qilindi, lekin hozir namuna kutilmayapti.",
+        "",
+        `O'z yozuv uslubingizni nusxalash uchun ${L.styleCopy} bo'limini ochib,`,
+        `${L.styleStart} tugmasini bosing.`,
+      ].join("\n"),
+      mainKeyboard(),
+    );
+    return;
+  }
+
+  await tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => undefined);
+
+  let profile: SampleProfile;
+  try {
+    profile = analyzeSample(decodeSampleImage(await downloadTelegramFile(fileId)));
+  } catch (error) {
+    await sendMessage(
+      chatId,
+      [
+        `⚠️ Rasmni o'qib bo'lmadi: ${(error as Error).message}`,
+        "",
+        "Varaqni yorug' joyda, to'liq ko'rinadigan qilib qayta suratga olib yuboring.",
+      ].join("\n"),
+      styleKeyboard(chatId),
+    );
+    return;
+  }
+
+  // Katak varaqadagi 10 ta raqamda siyoh kam bo'ladi, shuning uchun chegara
+  // qadamga qarab pasaytiriladi (chiziqlar allaqachon olib tashlangan).
+  const quality = sampleQuality(profile, {
+    minLines: 1,
+    minInk: step === "words" ? 400 : 150,
+  });
+  if (!quality.ok) {
+    await sendMessage(
+      chatId,
+      [
+        `⚠️ ${quality.reason}`,
+        "",
+        step === "words"
+          ? "10 ta so'zni yozib, varaqni to'liq ko'rinishda qayta suratga oling."
+          : "10 ta raqamni bir satrga yozib, varaqni to'liq ko'rinishda qayta suratga oling.",
+      ].join("\n"),
+      styleKeyboard(chatId),
+    );
+    return;
+  }
+
+  if (step === "words") {
+    await updateSettings(chatId, { styleWords: profile, styleStep: "digits" });
+    await sendMessage(chatId, styleDigitsText(), styleKeyboard(chatId));
+    return;
+  }
+
+  const words = rawSettings(chatId).styleWords;
+  if (!words) {
+    // So'zlar namunasi yo'q (masalan, bot qayta ishga tushgan) — 1-qadamdan boshlaymiz.
+    await updateSettings(chatId, { styleStep: "words" });
+    await sendMessage(chatId, ["So'zlar namunasi topilmadi — 1-qadamdan boshlaymiz.", "", styleWordsText()].join("\n"), styleKeyboard(chatId));
+    return;
+  }
+
+  await measureStyleSample(chatId, words, profile);
+}
+
+/* ------------------------------------------------------------------ */
 /* Pastki menyu tugmalarini qayta ishlash                              */
 /* ------------------------------------------------------------------ */
 
@@ -1352,6 +2742,9 @@ async function handleMenuLabelInner(chatId: number, label: string): Promise<bool
     return true;
   }
 
+  // 1a. Yozish joyi va tahrirlash oqimlarining tugmalari (raqamlar, betlar).
+  if (await handleEditFlowLabel(chatId, label)) return true;
+
   // 1b. Daftar kartasi amallari (karta ochiq bo'lganda ko'rinadi).
   if (label === L.cardWrite || label === L.cardDownload || label === L.cardRename) {
     const store = await books();
@@ -1363,16 +2756,8 @@ async function handleMenuLabelInner(chatId: number, label: string): Promise<bool
     }
 
     if (label === L.cardWrite) {
-      await updateSettings(chatId, { notebookId: notebook.id, menu: "main" });
-      await sendMessage(
-        chatId,
-        [
-          `✍️ «${notebook.title}» ochildi — ${store.usedSides(notebook)}/${store.capacity(notebook)} bet band.`,
-          "",
-          "Endi yuborgan matningiz shu daftarga yoziladi.",
-        ].join("\n"),
-        mainKeyboard(),
-      );
+      store.setActive(chatId, notebook.id);
+      await openWriteSession(chatId, notebook, store);
       return true;
     }
 
@@ -1394,16 +2779,138 @@ async function handleMenuLabelInner(chatId: number, label: string): Promise<bool
     return true;
   }
 
-  // 1c. Nomsiz qoldirish (yangi daftarga nom so'ralganda).
+  // 1c. Nomsiz qoldirish (daftarga yoki uslubga nom so'ralganda).
   if (label === L.skipName) {
     const pending = rawSettings(chatId).pending;
     if (pending?.kind === "create") {
       await updateSettings(chatId, { pending: undefined });
       await createNotebook(chatId, pending.sheets);
+    } else if (pending?.kind === "styleName") {
+      await updateSettings(chatId, { pending: undefined });
+      await saveStyle(chatId);
     } else {
       await openMenu(chatId, "books");
     }
     return true;
+  }
+
+  // 1d. «Uslubimni nusxalash» bo'limi.
+  if (label === L.styleCopy) {
+    await updateSettings(chatId, { menu: "style" });
+    await sendMessage(chatId, styleText(chatId), styleKeyboard(chatId));
+    return true;
+  }
+
+  if (label === L.styleStart) {
+    await startStyleSample(chatId);
+    return true;
+  }
+
+  if (label === L.styleSkipDigits) {
+    const words = rawSettings(chatId).styleWords;
+    if (words) await measureStyleSample(chatId, words, null);
+    else await openMenu(chatId, "style");
+    return true;
+  }
+
+  if (label === L.styleCancel) {
+    const wasDeleting = rawSettings(chatId).styleStep === "delete";
+    await updateSettings(chatId, {
+      menu: "style",
+      styleStep: undefined,
+      styleWords: undefined,
+      styleDraft: undefined,
+      pending: undefined,
+    });
+    await sendMessage(
+      chatId,
+      wasDeleting ? "❌ O'chirish bekor qilindi — uslublar o'z holida qoldi." : "❌ Namuna bekor qilindi.",
+      styleKeyboard(chatId),
+    );
+    return true;
+  }
+
+  if (label === L.styleStop) {
+    await updateSettings(chatId, { styleId: undefined });
+    await sendMessage(
+      chatId,
+      "⏹ Shaxsiy uslub to'xtatildi — endi ommaviy shriftlar ishlatiladi. Uslub bazada qoladi.",
+      styleKeyboard(chatId),
+    );
+    return true;
+  }
+
+  if (label === L.styleDelete) {
+    const store = await styles();
+    const list = store.list(chatId);
+    if (list.length === 0) {
+      await openMenu(chatId, "style");
+      return true;
+    }
+    // Bir nechta uslub bo'lsa — qaysi birini o'chirishni so'raymiz (shunda
+    // keraksizni o'chirish uchun uni avval yoqish shart emas).
+    if (list.length > 1) {
+      await updateSettings(chatId, { menu: "style", styleStep: "delete" });
+      await sendMessage(chatId, deletePickerText(list), styleKeyboard(chatId));
+      return true;
+    }
+
+    const only = list[0];
+    await store.remove(chatId, only.id);
+    const active = activeStyle(chatId);
+    await updateSettings(chatId, {
+      menu: "style",
+      styleStep: undefined,
+      ...(active?.id === only.id ? { styleId: undefined } : {}),
+    });
+    await sendMessage(chatId, styleDeletedText(only.name, 0), styleKeyboard(chatId));
+    return true;
+  }
+
+  // 1d-0. O'chirish tanlovi: `🗑 <nom>` tugmasi bosildi.
+  if (unmark(label).startsWith("🗑 ")) {
+    const wanted = unmark(label).slice(2).trim();
+    const store = await styles();
+    const record = store.list(chatId).find((item) => item.name === wanted);
+    if (record && (await store.remove(chatId, record.id))) {
+      const active = activeStyle(chatId);
+      await updateSettings(chatId, {
+        menu: "style",
+        styleStep: undefined,
+        ...(active?.id === record.id ? { styleId: undefined } : {}),
+      });
+      await sendMessage(chatId, styleDeletedText(record.name, store.list(chatId).length), styleKeyboard(chatId));
+      return true;
+    }
+    await openMenu(chatId, "style");
+    return true;
+  }
+
+  // 1e. Saqlangan uslubni yoqish (`✒️ nom` tugmasi → tugma matni xaritasi).
+  if (/^(✓\s*)?✒️ /.test(label)) {
+    const store = await styles();
+    const list = store.list(chatId);
+    const mapped = rawSettings(chatId).styleButtons?.[label] ?? rawSettings(chatId).styleButtons?.[unmark(label)];
+    const record = mapped
+      ? store.get(chatId, mapped)
+      : list.find((item) => unmark(label) === `✒️ ${item.name}`);
+    if (record) {
+      await updateSettings(chatId, { styleId: record.id, menu: "style", pending: undefined, styleStep: undefined });
+      await sendMessage(
+        chatId,
+        [
+          `✅ «${record.name}» uslubi yoqildi.`,
+          `• Asos: ${displayName(record.baseFont)}`,
+          record.summary ? `• ${record.summary}` : "",
+          "",
+          "Endi barcha varaqalar shu uslubda chiziladi.",
+        ]
+          .filter((line) => line.length > 0)
+          .join("\n"),
+        styleKeyboard(chatId),
+      );
+      return true;
+    }
   }
 
   if (label === L.text) {
@@ -1437,16 +2944,10 @@ async function handleMenuLabelInner(chatId: number, label: string): Promise<bool
         await openCard(chatId, notebook.id);
         return true;
       }
-      await updateSettings(chatId, { notebookId: notebook.id, menu: "main" });
-      await sendMessage(
-        chatId,
-        [
-          `📖 «${notebook.title}» ochildi — ${store.usedSides(notebook)}/${store.capacity(notebook)} bet band.`,
-          "",
-          "Endi matn yuboring; u ochiq varaq tomoniga yoziladi.",
-        ].join("\n"),
-        mainKeyboard(),
-      );
+      // Daftar tanlangach darhol "qayerdan yozamiz?" so'raladi: oxirgi yozuv
+      // joyi va betdagi bo'sh qatorlar ko'rsatiladi.
+      store.setActive(chatId, notebook.id);
+      await openWriteSession(chatId, notebook, store);
       return true;
     }
   }
@@ -1554,6 +3055,11 @@ async function handlePendingText(chatId: number, text: string): Promise<boolean>
     return true;
   }
 
+  if (pending.kind === "styleName") {
+    await saveStyle(chatId, text);
+    return true;
+  }
+
   await renameNotebook(chatId, pending.id, text);
   return true;
 }
@@ -1591,6 +3097,12 @@ async function handleCommand(chatId: number, text: string): Promise<void> {
 
   if (command === "/fonts") {
     await openFontPage(chatId, fontPageOf(chatId));
+    return;
+  }
+
+  if (command === "/style" || command === "/uslub") {
+    await updateSettings(chatId, { menu: "style" });
+    await sendMessage(chatId, styleText(chatId), styleKeyboard(chatId));
     return;
   }
 
@@ -1692,9 +3204,23 @@ async function handleCommand(chatId: number, text: string): Promise<void> {
 
 async function processUpdate(update: TgUpdate): Promise<void> {
   const message = update.message;
-  if (!message?.chat || typeof message.text !== "string") return;
+  if (!message?.chat) return;
 
   const chatId = message.chat.id;
+
+  // Rasm (namuna): foto yoki hujjat sifatida yuborilgan bo'lishi mumkin.
+  const photoId = largestPhotoId(message);
+  if (photoId) {
+    await handleStyleSample(chatId, photoId);
+    return;
+  }
+  const document = message.document;
+  if (document && (document.mime_type ?? "").startsWith("image/")) {
+    await handleStyleSample(chatId, document.file_id);
+    return;
+  }
+
+  if (typeof message.text !== "string") return;
   const text = message.text.trim();
 
   if (text.startsWith("/")) {
@@ -1849,6 +3375,10 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
+
+  // Uslublar bazasini oldindan yuklaymiz: `styleFor()` sinxron ishlaydi, shu
+  // sababli faol uslub har doim xotiradan olinadi.
+  await styles();
 
   // Standart shrift o'qilmasa, foydalanuvchi matn yuborganda buni darhol
   // bilish uchun ishga tushishda tekshiramiz.

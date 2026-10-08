@@ -12,6 +12,11 @@ export interface PlacedAtom {
 
 export interface LineLayout {
   atoms: PlacedAtom[];
+  /**
+   * Qatordagi so'zlar soni (bo'shliqlar hisobga olinmaydi). Daftar tahriri
+   * (qator/so'z bo'yicha o'chirish) shu sandan foydalanadi.
+   */
+  words: number;
 }
 
 export interface PageLayout {
@@ -32,6 +37,10 @@ export interface LayoutResult {
    * kengligi teng — shu sababli qatorlarga bo'linish bir xil qoladi.
    */
   versoTextLeft: number;
+  /** Bir betga sig'adigan qatorlar soni (qator oralig'i va chetlardan). */
+  linesPerPage: number;
+  /** Barcha qatorlar ketma-ket (betlarga bo'linmagan holda). */
+  lines: LineLayout[];
 }
 
 /** Qo'lyozmada ko'p uchraydigan "bir xil ma'noli" belgilar. */
@@ -65,6 +74,10 @@ interface BuildContext {
   warnings: Set<string>;
   math: MathContext;
   spaceAtoms: WeakSet<Atom>;
+  /** Shaxsiy uslub: harf kengligi cho'zilishi (1 — o'zgarmagan). */
+  stretch: number;
+  /** Shaxsiy uslub: harflar orasidagi masofa ko'paytiruvchisi. */
+  tracking: number;
 }
 
 function fontFor(ch: string, ctx: BuildContext): HandwritingFont | undefined {
@@ -91,16 +104,20 @@ function resolveChar(ch: string, ctx: BuildContext): ResolvedChar | null {
 }
 
 function advanceOf(resolved: ResolvedChar, ctx: BuildContext): number {
+  // Shaxsiy uslub kenglik va oraliqni o'zgartiradi; hisob shu yerda — render
+  // ham aynan shu kengliklardan foydalanadi, shuning uchun qatorlarga bo'linish
+  // (wrap) bilan chizilgan matn mos keladi.
+  const factor = ctx.stretch * ctx.tracking;
   if (resolved.kind === "glyph" && resolved.font) {
-    return glyphAdvance(resolved.font, resolved.ch) * ctx.size;
+    return glyphAdvance(resolved.font, resolved.ch) * ctx.size * factor;
   }
-  return symbolAdvance(resolved.ch) * ctx.size;
+  return symbolAdvance(resolved.ch) * ctx.size * factor;
 }
 
 function makeSpaceAtom(ctx: BuildContext): Atom {
   const widthEm = fontHas(ctx.primary, " ") ? glyphAdvance(ctx.primary, " ") : 0.26;
   const atom: Atom = {
-    width: Math.max(widthEm, 0.22) * ctx.size * 1.06,
+    width: Math.max(widthEm, 0.22) * ctx.size * 1.06 * ctx.stretch * Math.max(1, ctx.tracking * 0.6),
     ascent: 0,
     descent: 0,
     render() {
@@ -137,7 +154,7 @@ function makeWordAtom(word: string, ctx: BuildContext): Atom | null {
       previous.font === resolved.font &&
       previous.font
     ) {
-      cursor += kern(previous.font, previous.ch, resolved.ch) * ctx.size;
+      cursor += kern(previous.font, previous.ch, resolved.ch) * ctx.size * ctx.stretch;
     }
 
     parts.push({ ...resolved, x: cursor });
@@ -254,7 +271,9 @@ function wrapAtoms(atoms: Atom[], maxWidth: number, ctx: BuildContext): LineLayo
 
   const pushLine = () => {
     while (current.length > 0 && isSpaceAtom(current[current.length - 1].atom, ctx)) current.pop();
-    if (current.length > 0) lines.push({ atoms: current });
+    if (current.length > 0) {
+      lines.push({ atoms: current, words: current.filter((placed) => !isSpaceAtom(placed.atom, ctx)).length });
+    }
     current = [];
     cursor = 0;
   };
@@ -293,7 +312,6 @@ export function layoutText(options: LayoutOptions): LayoutResult {
   const k = width / 1240;
 
   const ruleTop = Math.round(92 * k);
-  const bottomMargin = Math.round(72 * k);
   const marginLeft = Math.round(style.marginLeft * k);
   const edgeGap = Math.round(56 * k);
   const marginGap = Math.round(20 * k);
@@ -326,6 +344,8 @@ export function layoutText(options: LayoutOptions): LayoutResult {
     warnings,
     math: { font: mathFont, warnings },
     spaceAtoms: new WeakSet(),
+    stretch: style.personal?.stretch ?? 1,
+    tracking: style.personal?.tracking ?? 1,
   };
 
   const normalized = options.text
@@ -338,18 +358,18 @@ export function layoutText(options: LayoutOptions): LayoutResult {
 
   for (const paragraph of paragraphs) {
     if (paragraph.trim().length === 0) {
-      allLines.push({ atoms: [] });
+      // Bo'sh qator (daftarda tashlab ketilgan joy) — qator sifatida saqlanadi.
+      allLines.push({ atoms: [], words: 0 });
       continue;
     }
     const atoms = buildAtoms(paragraph, buildCtx);
     const lines = wrapAtoms(atoms, maxWidth, buildCtx);
-    if (lines.length === 0) allLines.push({ atoms: [] });
+    if (lines.length === 0) allLines.push({ atoms: [], words: 0 });
     else allLines.push(...lines);
   }
 
   const lineGap = style.lineGap;
-  const usableHeight = Math.max(lineGap, height - ruleTop - bottomMargin);
-  const linesPerPage = Math.max(1, Math.floor(usableHeight / lineGap));
+  const linesPerPage = linesPerPageFor(style.pageFormat, lineGap);
 
   const pages: PageLayout[] = [];
   for (let i = 0; i < allLines.length; i += linesPerPage) {
@@ -373,9 +393,26 @@ export function layoutText(options: LayoutOptions): LayoutResult {
     firstBaseline: ruleTop + lineGap - Math.round(3 * k),
     textLeft,
     versoTextLeft,
+    linesPerPage,
+    lines: allLines,
   };
 }
 
 export function baselineForLine(index: number, layout: LayoutResult): number {
   return layout.firstBaseline + index * layout.paper.lineGap;
+}
+
+/**
+ * Bir betga sig'adigan qatorlar soni: varaq balandligidan tepadagi va pastdagi
+ * chetlar ayriladi, natija qator oralig'iga bo'linadi. `layoutText` ham aynan
+ * shu funksiyadan foydalanadi, shuning uchun daftar tahriri (qator raqamlari)
+ * chizilgan varaqa bilan mos keladi.
+ */
+export function linesPerPageFor(format: NotebookStyle["pageFormat"], lineGap: number): number {
+  const { width, height } = pageSizeFor(format);
+  const k = width / 1240;
+  const ruleTop = Math.round(92 * k);
+  const bottomMargin = Math.round(72 * k);
+  const usableHeight = Math.max(lineGap, height - ruleTop - bottomMargin);
+  return Math.max(1, Math.floor(usableHeight / lineGap));
 }
