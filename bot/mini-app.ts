@@ -27,13 +27,14 @@ export const MINI_APP_STATE_PATH = "/mini-app/state";
 /** Daftar bilan ishlash: yaratish, nomlash, o'chirish, orqaga qaytarish, PDF. */
 export const MINI_APP_NOTEBOOK_PATH = "/mini-app/notebook";
 /** Mini App'dan chaqiriladigan daftar amallari. */
-export type MiniAppNotebookAction = "create" | "rename" | "remove" | "undo" | "book";
+export type MiniAppNotebookAction = "create" | "rename" | "remove" | "undo" | "book" | "clearSide";
 export const MINI_APP_NOTEBOOK_ACTIONS: MiniAppNotebookAction[] = [
   "create",
   "rename",
   "remove",
   "undo",
   "book",
+  "clearSide",
 ];
 export const HEALTH_PATH = "/healthz";
 /** `initData` shu vaqtdan eski bo'lsa qabul qilinmaydi (o'g'irlangan ma'lumot uchun). */
@@ -76,11 +77,17 @@ export interface MiniAppRequest {
   startLine?: number;
 }
 
-/** Holat so'rovi: `notebookId` berilsa, o'sha daftar ochiq qilib qo'yiladi. */
+/**
+ * Holat so'rovi: `notebookId` berilsa, o'sha daftar ochiq qilib qo'yiladi.
+ *
+ * `spreadIndex` berilsa, javobda daftarning **ochilgan ko'rinishi** (ikki
+ * qarama-qarshi bet) ham qaytariladi — Mini App daftarni kitobdek ko'rsatadi.
+ */
 export interface MiniAppStateRequest {
   chatId: number;
   user?: MiniAppUser;
   notebookId?: string;
+  spreadIndex?: number;
 }
 
 /** Bitta daftar haqida Studio ko'rsatadigan qisqa ma'lumot. */
@@ -112,11 +119,42 @@ export interface MiniAppSideInfo {
   freeLines: number;
 }
 
+/**
+ * Ochilgan daftardagi bitta bet (kitob ko'rinishining bir tomoni).
+ *
+ * `style` — shu betning o'z uslubi: betning tomoni (chegara chapda yoki o'ngda)
+ * bet indeksiga qarab almashadi, shu sababli har bet o'z uslubi bilan chiziladi.
+ */
+export interface MiniAppSpreadSide {
+  index: number;
+  text: string;
+  style: unknown;
+}
+
+/**
+ * Daftarning ochilgan ko'rinishi: chap va o'ng betlar bir joydan (muqovadan)
+ * birlashtirilgan. Mavjud bo'lmagan bet `null` — Mini App bo'sh varaqa chizadi.
+ */
+export interface MiniAppSpread {
+  /** Nechanchi ko'rinish (0 dan boshlanadi): `[2k, 2k+1]` betlar jufti. */
+  index: number;
+  /** Nechta ko'rinish bor (band betlar asosida). */
+  total: number;
+  left: MiniAppSpreadSide | null;
+  right: MiniAppSpreadSide | null;
+  /** Band betlar soni — "3/24 bet" ko'rsatkichi uchun. */
+  usedSides: number;
+  /** Jami betlar soni. */
+  capacity: number;
+}
+
 /** `POST /mini-app/state` javobi. */
 export interface MiniAppState {
   notebooks: MiniAppNotebookInfo[];
   activeId: string | null;
   side: MiniAppSideInfo | null;
+  /** Daftar ochiq ko'rinishda (ikki bet) — faqat `spreadIndex` so'ralganda. */
+  spread?: MiniAppSpread | null;
   /** Chat uslubi (daftar bo'lsa — o'sha daftarning qog'ozi bilan). */
   style: unknown;
 }
@@ -142,6 +180,8 @@ export interface MiniAppNotebookRequest {
   sheets?: unknown;
   /** `create` uchun qog'oz turi (`lined`/`grid`/`plain`); tekshirish chaqiruvchi tomonda. */
   paper?: unknown;
+  /** `clearSide` uchun bet indeksi (0 dan boshlanadi). */
+  sideIndex?: unknown;
 }
 
 /** `POST /mini-app/notebook` javobi (xato ham shu ko'rinishda qaytadi). */
@@ -368,6 +408,8 @@ export function createMiniAppHandler(
       title?: unknown;
       sheets?: unknown;
       paper?: unknown;
+      sideIndex?: unknown;
+      spreadIndex?: unknown;
     };
     try {
       const raw = await readBody(request);
@@ -401,6 +443,15 @@ export function createMiniAppHandler(
       typeof payload.startLine === "number" && Number.isFinite(payload.startLine) && payload.startLine >= 1
         ? Math.floor(payload.startLine)
         : undefined;
+    // Kitob ko'rinishi va betni tozalash uchun indekslar: manfiy qiymat rad etiladi.
+    const spreadIndex =
+      typeof payload.spreadIndex === "number" && Number.isFinite(payload.spreadIndex) && payload.spreadIndex >= 0
+        ? Math.floor(payload.spreadIndex)
+        : undefined;
+    const sideIndex =
+      typeof payload.sideIndex === "number" && Number.isFinite(payload.sideIndex) && payload.sideIndex >= 0
+        ? Math.floor(payload.sideIndex)
+        : undefined;
 
     // Holat so'rovi: daftarlar ro'yxati va joriy bet (matn talab qilinmaydi).
     if (isState) {
@@ -409,7 +460,7 @@ export function createMiniAppHandler(
         return;
       }
       try {
-        const state = await options.state({ chatId, user: check.user, notebookId });
+        const state = await options.state({ chatId, user: check.user, notebookId, spreadIndex });
         sendJson(response, 200, { ok: true, ...state }, cors);
       } catch (error) {
         log(`Mini App: holat so'rovida xato — ${(error as Error).message}`);
@@ -447,6 +498,7 @@ export function createMiniAppHandler(
           ...(title ? { title } : {}),
           sheets: payload.sheets,
           paper: payload.paper,
+          sideIndex,
         });
         sendJson(
           response,

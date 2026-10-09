@@ -285,7 +285,14 @@ export function sanitizeStyle(raw: unknown): Partial<NotebookStyle> {
 /* ------------------------------------------------------------------ */
 
 /** Mini App'dan chaqiriladigan daftar amali (botdagi tugmalar bilan bir xil). */
-export type MiniAppNotebookAction = "create" | "rename" | "remove" | "undo" | "book";
+export type MiniAppNotebookAction =
+  | "create"
+  | "rename"
+  | "remove"
+  | "undo"
+  | "book"
+  /** Bitta betdagi yozuvni o'chirish (kitob ko'rinishidan). */
+  | "clearSide";
 
 /** `manageNotebook()` uchun so'rov: amal va unga kerakli maydonlar. */
 export interface MiniAppNotebookPayload {
@@ -298,6 +305,8 @@ export interface MiniAppNotebookPayload {
   sheets?: number;
   /** Yangi daftar qog'ozi (`create`): `lined`/`grid`/`plain`. */
   paper?: PaperType;
+  /** Qaysi betdagi yozuv o'chiriladi (`clearSide`): 0 dan boshlanadi. */
+  sideIndex?: number;
 }
 
 export interface MiniAppNotebookResult {
@@ -339,10 +348,37 @@ export interface MiniAppSide {
   freeLines: number;
 }
 
+/**
+ * Ochilgan daftardagi bitta bet (kitob ko'rinishining bir tomoni). `style` —
+ * shu betning o'z uslubi (chegara tomoni bet indeksiga qarab almashadi).
+ */
+export interface MiniAppSpreadSide {
+  index: number;
+  text: string;
+  style: Partial<NotebookStyle>;
+}
+
+/**
+ * Daftarning ochilgan ko'rinishi: chap va o'ng bet muqovadan birlashtirilgan
+ * holda. Yozilmagan bet `null` — o'sha tomonda bo'sh varaqa chiziladi.
+ */
+export interface MiniAppSpread {
+  /** Nechanchi ko'rinish (0 dan boshlanadi): `[2k, 2k+1]` betlar jufti. */
+  index: number;
+  /** Jami ko'rinishlar soni (band betlar bo'yicha). */
+  total: number;
+  left: MiniAppSpreadSide | null;
+  right: MiniAppSpreadSide | null;
+  usedSides: number;
+  capacity: number;
+}
+
 export interface MiniAppState {
   notebooks: MiniAppNotebook[];
   activeId: string | null;
   side: MiniAppSide | null;
+  /** Daftar ochiq ko'rinishda — faqat `spreadIndex` so'ralganda keladi. */
+  spread: MiniAppSpread | null;
   style: Partial<NotebookStyle>;
 }
 
@@ -470,7 +506,20 @@ export async function sendToChat(payload: MiniAppSendPayload): Promise<MiniAppSe
  *
  * Xatolar ham natija sifatida qaytariladi — UI'ni yiqitmasligi uchun.
  */
-export async function fetchNotebookState(notebookId?: string | null): Promise<MiniAppStateResult> {
+export async function fetchNotebookState(
+  notebookId?: string | null,
+  spreadIndex?: number,
+): Promise<MiniAppStateResult> {
+  const spreadSide = (raw: unknown): MiniAppSpreadSide | null => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const side = raw as { index?: unknown; text?: unknown; style?: unknown };
+    if (typeof side.index !== "number" || !Number.isFinite(side.index)) return null;
+    return {
+      index: Math.max(0, Math.floor(side.index)),
+      text: typeof side.text === "string" ? side.text : "",
+      style: sanitizeStyle(side.style),
+    };
+  };
   const app = getTelegramWebApp();
   const initData = app?.initData ?? "";
 
@@ -487,7 +536,13 @@ export async function fetchNotebookState(notebookId?: string | null): Promise<Mi
     response = await fetch(MINI_APP_STATE_ENDPOINT, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ initData, ...(notebookId ? { notebookId } : {}) }),
+      body: JSON.stringify({
+        initData,
+        ...(notebookId ? { notebookId } : {}),
+        ...(typeof spreadIndex === "number" && spreadIndex >= 0
+          ? { spreadIndex: Math.floor(spreadIndex) }
+          : {}),
+      }),
       signal: AbortSignal.timeout(STATE_TIMEOUT_MS),
     });
   } catch {
@@ -517,12 +572,38 @@ export async function fetchNotebookState(notebookId?: string | null): Promise<Mi
   }
 
   const notebooks = body?.notebooks;
+  const rawSpread = (body as { spread?: unknown } | null)?.spread;
+  const spread: MiniAppSpread | null =
+    rawSpread && typeof rawSpread === "object" && !Array.isArray(rawSpread)
+      ? (() => {
+          const input = rawSpread as {
+            index?: unknown;
+            total?: unknown;
+            left?: unknown;
+            right?: unknown;
+            usedSides?: unknown;
+            capacity?: unknown;
+          };
+          const number = (value: unknown, fallback: number): number =>
+            typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
+          return {
+            index: number(input.index, 0),
+            total: Math.max(1, number(input.total, 1)),
+            left: spreadSide(input.left),
+            right: spreadSide(input.right),
+            usedSides: number(input.usedSides, 0),
+            capacity: number(input.capacity, 0),
+          };
+        })()
+      : null;
+
   return {
     ok: true,
     state: {
       notebooks: Array.isArray(notebooks) ? notebooks : [],
       activeId: typeof body?.activeId === "string" ? body.activeId : null,
       side: body?.side ?? null,
+      spread,
       style: sanitizeStyle(body?.style),
     },
   };
@@ -562,6 +643,9 @@ export async function manageNotebook(
         ...(payload.title ? { title: payload.title } : {}),
         ...(payload.sheets ? { sheets: payload.sheets } : {}),
         ...(payload.paper ? { paper: payload.paper } : {}),
+        ...(typeof payload.sideIndex === "number" && payload.sideIndex >= 0
+          ? { sideIndex: Math.floor(payload.sideIndex) }
+          : {}),
       }),
       signal: AbortSignal.timeout(NOTEBOOK_TIMEOUT_MS),
     });

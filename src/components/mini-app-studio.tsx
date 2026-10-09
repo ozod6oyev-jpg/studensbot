@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { FontGallery } from "@/components/font-gallery";
 import { MiniAppWriter } from "@/components/mini-app-writer";
+import { NotebookBook } from "@/components/notebook-book";
 import { Button } from "@/components/ui/button";
 import { Badge, Segmented, Slider, Switch } from "@/components/ui/controls";
 import { Label, Textarea } from "@/components/ui/form";
@@ -803,6 +804,21 @@ export const MiniAppStudio = memo(function MiniAppStudio({
               onPickLine={onPickLine}
               onManage={miniApp.manageNotebook}
               busy={miniApp.notebookBusy}
+            />
+            <NotebookBook
+              notebookId={miniApp.state.state?.activeId ?? null}
+              title={
+                miniApp.state.state?.notebooks.find(
+                  (entry) => entry.id === miniApp.state.state?.activeId,
+                )?.title ?? null
+              }
+              onManage={miniApp.manageNotebook}
+              busy={miniApp.notebookBusy}
+              refreshKey={`${miniApp.state.state?.activeId ?? ""}:${
+                miniApp.state.state?.notebooks.find(
+                  (entry) => entry.id === miniApp.state.state?.activeId,
+                )?.usedSides ?? 0
+              }`}
             />
             {side && (
               <p className="px-1 text-xs leading-relaxed text-pencil/70">

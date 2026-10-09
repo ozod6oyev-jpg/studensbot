@@ -471,7 +471,7 @@ function helpText(): string {
     "  📐 yozuv sozlamalari (o'lcham, qator oralig'i, qo'l tebranishi, matematika,",
     "  yuborish turi) va 📚 daftarlar (yozish, tahrirlash, PDF kitob, nomini o'zgartirish),",
     `• ${L.styleCopy} — o'z qo'lyozmangizni nusxalash,`,
-    `• ${L.help} — shu qo'llanma, ${L.chatId} — chat raqamingiz,`,
+    `• ${L.help} — shu qo'llanma,`,
     ...(miniAppUrl()
       ? [`• ${L.studio} — chat menyusidagi tugma bilan ochib, natijani chatga yuborasiz.`]
       : []),
@@ -844,7 +844,9 @@ function mainKeyboard(): TgMarkup {
   const rows: ButtonSpec[][] = [
     [L.text, L.settings],
     // Yordam va chat ID — buyruqlar ro'yxati o'rniga tugma bo'lib turadi.
-    [L.help, L.chatId],
+    // Yordam — buyruqlar ro'yxati o'rniga bitta tugma. (Chat ID tugmasi
+    // ataylab yo'q: oddiy foydalanuvchiga u kerak emas.)
+    [L.help],
   ];
   // Mini App sozlangan bo'lsa — Studio pastdagi menyudan ham ochiladi.
   const studio = miniAppUrl();
@@ -1651,10 +1653,40 @@ async function miniAppState(request: MiniAppStateRequest): Promise<MiniAppState>
 
   const side = await miniAppPosition(chatId, notebook);
   const renderSide = Math.max(0, Math.min(side.sideIndex, store.usedSides(notebook) - 1));
+
+  // Kitob ko'rinishi (`spreadIndex` so'ralganda): daftar ochilgan holda ikki
+  // qarama-qarshi bet ko'rsatiladi. Betning o'z uslubi ham qaytariladi — chegara
+  // tomoni bet indeksiga qarab almashadi, shu sababli har bet o'zi chiziladi.
+  const spread =
+    request.spreadIndex === undefined
+      ? null
+      : (() => {
+          const usedSides = store.usedSides(notebook);
+          const capacity = store.capacity(notebook);
+          const total = Math.max(1, Math.ceil(Math.max(usedSides, 1) / 2));
+          const index = Math.min(total - 1, Math.max(0, Math.floor(request.spreadIndex ?? 0)));
+          const sideAt = (sideIndex: number) => {
+            if (sideIndex >= capacity) return null;
+            const text = notebook.sides[sideIndex]?.text ?? "";
+            // Yozilmagan bo'sh bet ko'rsatilmaydi (varaq oq bo'lib turadi).
+            if (text.length === 0 && sideIndex >= usedSides) return null;
+            return { index: sideIndex, text, style: notebookStyle(chatId, notebook, sideIndex) };
+          };
+          return {
+            index,
+            total,
+            left: sideAt(index * 2),
+            right: sideAt(index * 2 + 1),
+            usedSides,
+            capacity,
+          };
+        })();
+
   return {
     notebooks,
     activeId,
     side,
+    ...(spread ? { spread } : {}),
     style: notebookStyle(chatId, notebook, renderSide),
   };
 }
@@ -1833,6 +1865,36 @@ async function miniAppNotebook(request: MiniAppNotebookRequest): Promise<MiniApp
     });
     store.setActive(chatId, null);
     return { ok: true, notebookId: null, title: null, message: `🗑 «${notebook.title}» o'chirildi.` };
+  }
+
+  // `clearSide`: bitta betdagi yozuv o'chiriladi (botdagi ✂️ Yozuvni o'chirish
+  // oqimining eng ko'p ishlatiladigan qismi — Mini App'da kitob ko'rinishidan
+  // turib bajariladi). O'chirish ham ↩️ orqaga qaytarish tarixiga tushadi.
+  if (request.action === "clearSide") {
+    const sideIndex =
+      typeof request.sideIndex === "number" && Number.isInteger(request.sideIndex)
+        ? request.sideIndex
+        : -1;
+    const usedSides = store.usedSides(notebook);
+    if (sideIndex < 0 || sideIndex >= usedSides) {
+      return { ok: false, message: "Bu betda o'chiriladigan yozuv yo'q — betni tekshirib ko'ring." };
+    }
+    const text = notebook.sides[sideIndex]?.text ?? "";
+    if (text.trim().length === 0) {
+      return { ok: false, message: `«${notebook.title}» ${sideIndex + 1}-betida yozuv yo'q.` };
+    }
+    const applied = await store.applySides(
+      notebook.id,
+      [{ index: sideIndex, text: "" }],
+      `${sideIndex + 1}-betdagi yozuvni o'chirish`,
+    );
+    if (!applied) return { ok: false, message: "Yozuvni o'chirib bo'lmadi. Keyinroq urinib ko'ring. 🙏" };
+    return {
+      ok: true,
+      notebookId: notebook.id,
+      title: notebook.title,
+      message: `✂️ «${notebook.title}» ${sideIndex + 1}-betidagi yozuv o'chirildi (↩️ bilan qaytarish mumkin).`,
+    };
   }
 
   // `undo`: daftar avvalgi holatiga qaytadi, natijani Mini App o'zi ko'rsatadi

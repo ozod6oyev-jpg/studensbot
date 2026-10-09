@@ -383,10 +383,12 @@ async function main(): Promise<void> {
     const greeting = mock.texts.filter((entry) => entry.text.includes("Assalomu alaykum")).pop();
     const greetingKeys = keyboardLabels(greeting?.markup ?? "");
     assert(Boolean(greeting), "birinchi /start da salomlashuv yuborildi");
+    // Chat ID tugmasi menyudan olib tashlangan: oddiy foydalanuvchiga u kerak emas.
     assert(
-      greetingKeys.length === 4 &&
-        [BTN.text, BTN.settings, BTN.help, BTN.chatId].every((label) => greetingKeys.includes(label)),
-      `pastdagi menyuda 4 ta tugma bor (${greetingKeys.join(", ")})`,
+      greetingKeys.length === 3 &&
+        [BTN.text, BTN.settings, BTN.help].every((label) => greetingKeys.includes(label)) &&
+        !greetingKeys.includes(BTN.chatId),
+      `pastdagi menyuda 3 ta tugma bor, Chat ID tugmasi yo'q (${greetingKeys.join(", ")})`,
     );
     assert(
       (greeting?.markup ?? "").includes('"resize_keyboard":true'),
