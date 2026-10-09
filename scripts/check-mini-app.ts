@@ -519,12 +519,111 @@ async function checkTextLimit(): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
+/* 1c-qism: Mini App studiyasi (Studio ichidagi alohida ko'rinish)      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Telegram Mini App ichida Studio boshqa ko'rinishda ochiladi: oyna tor va
+ * baland, shuning uchun brauzerdagi keng maket o'rniga `MiniAppStudio`
+ * ishlatiladi.
+ *
+ * Shu qism o'sha ko'rinishning eng muhim shartlarini qo'riqlaydi: u Mini App
+ * rejimida ulanadi, matn chegarasini biladi (bot bilan bir xil), tanlangan
+ * daftar va qatorni yuboradi, daftar amallari shu yerda ham bor va namuna
+ * matnlar brauzerdagi Studio bilan bir manbadan olinadi.
+ */
+async function checkMiniAppStudio(): Promise<void> {
+  console.log("\n=== 1c-qism: Mini App studiyasi ===");
+  const studioPage = await readFile(
+    fileURLToPath(new URL("../src/pages/Studio.tsx", import.meta.url)),
+    "utf8",
+  );
+  const studioFile = await readFile(
+    fileURLToPath(new URL("../src/components/mini-app-studio.tsx", import.meta.url)),
+    "utf8",
+  );
+
+  assert(
+    /if\s*\(miniApp\.active\)\s*\{[\s\S]{0,400}?<MiniAppStudio/.test(studioPage),
+    "Mini App rejimida Studio `MiniAppStudio` ko'rinishini beradi",
+  );
+  assert(
+    studioFile.includes("MiniAppWriter"),
+    "studiyada daftar amallari (yaratish, nom, orqaga, PDF, o'chirish) bor",
+  );
+  assert(
+    /miniApp\.sendToChat\(/.test(studioFile),
+    "studiya matnni botga `sendToChat()` bilan yuboradi",
+  );
+  assert(
+    /notebookId: activeNotebook\?\.id \?\? undefined/.test(studioFile) &&
+      /startLine: startLine \?\? undefined/.test(studioFile),
+    "studiya tanlangan daftar va qatorni ham yuboradi",
+  );
+  assert(
+    studioFile.includes("MINI_APP_TEXT_LIMIT"),
+    "studiya matn chegarasini biladi (bot bilan bir xil)",
+  );
+  assert(
+    /disabled=\{sending \|\| trimmedLength === 0 \|\| overLimit\}/.test(studioFile),
+    "chegaradan uzun matn bilan yuborish tugmasi o'chadi",
+  );
+  assert(
+    ["Matn", "Uslub", "Varaq", "Daftar"].every((label) =>
+      studioFile.includes(`label: "${label}"`),
+    ),
+    "studiya to'rt bo'limga bo'lingan (Matn, Uslub, Varaq, Daftar)",
+  );
+  assert(
+    studioFile.includes("@/lib/handwriting/samples") &&
+      studioPage.includes("@/lib/handwriting/samples"),
+    "namuna matnlar ikki ko'rinishda ham bir manbadan olinadi",
+  );
+
+  // Asboblar: studiya matn bilan ishlash, tayyor o'lchamlar va varaqani
+  // kattalashtirishni o'zi taklif qilishi kerak — foydalanuvchi brauzerni
+  // masshtablamasin yoki sahifani yon tomonga surmasiн.
+  assert(
+    studioFile.includes("@/lib/handwriting/text-tools") &&
+      studioPage.includes("@/lib/handwriting/text-tools"),
+    "matn asboblari (tozalash, registr) ikkala ko'rinishda ham bir manbadan",
+  );
+  assert(
+    ["trim", "collapse", "stripEmpty", "upper", "lower", "title"].every((tool) =>
+      studioFile.includes(`runTextTool("${tool}")`),
+    ),
+    "studiya matn asboblarini taklif qiladi (bo'shliq, bo'sh qatorlar, registr)",
+  );
+  assert(
+    studioFile.includes("GEOMETRY_PRESETS") && studioFile.includes("STYLE_RANGES"),
+    "studiya tayyor o'lchamlarni va ularning oraliqlarini ishlatadi",
+  );
+  assert(
+    /style=\{\{ width: overlayScale === null \? "100%" : `\$\{overlayScale\}%` \}\}/.test(studioFile),
+    "kattalashtirish tugmalar bilan boshqariladi (barmoq bilan masshtablash shart emas)",
+  );
+  assert(
+    studioFile.includes("overflow-auto") && /max-h-|min-h-0 flex-1 overflow-auto/.test(studioFile),
+    "kattalashtirilgan varaqa faqat o'z oynasi ichida siljiydi",
+  );
+  assert(
+    /min-w-0/.test(studioPage),
+    "brauzer maketidagi ustunlar `min-w-0` bilan cheklangan (sahifa yon tomonga cho'zilmaydi)",
+  );
+  assert(
+    /flex-col-reverse/.test(studioPage),
+    "tor ekranda natija birinchi ko'rinadi (asboblar pastda)",
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* 2-qism: bot + HTTP endpoint (mock Telegram API)                      */
 /* ------------------------------------------------------------------ */
 
 async function main(): Promise<void> {
   checkInitData();
   await checkTextLimit();
+  await checkMiniAppStudio();
 
   console.log("\n=== 2-qism: bot, Mini App tugmasi va /mini-app/send ===");
   const mock = await startMockTelegram();

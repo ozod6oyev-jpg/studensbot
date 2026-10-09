@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, PenLine, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge, Segmented } from "@/components/ui/controls";
@@ -91,9 +91,35 @@ function FontTile({
 }) {
   const [url, setUrl] = useState<string | null>(() => previewCache.get(entry.id) ?? null);
   const [failed, setFailed] = useState(false);
+  /** Plitka ekranga yaqinlashganda `true` bo'ladi (namuna shundan keyin chiziladi). */
+  const [nearView, setNearView] = useState(() => typeof IntersectionObserver === "undefined");
+  const tileRef = useRef<HTMLButtonElement | null>(null);
+
+  // Galereya ochilganda 39 ta namuna birdan chizilsa, sahifa bir zumga qotib
+  // qoladi. Shuning uchun namuna faqat plitka ko'rinadigan joyga kelganda
+  // so'raladi (ko'rinmas plitkalar navbatni egallamaydi).
+  useEffect(() => {
+    if (nearView || url) return;
+    const node = tileRef.current;
+    if (!node || typeof IntersectionObserver === "undefined") {
+      setNearView(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((item) => item.isIntersecting)) {
+          setNearView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "240px 0px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [nearView, url]);
 
   useEffect(() => {
-    if (url) return;
+    if (url || !nearView) return;
     let cancelled = false;
     fontPreview(entry)
       .then((value) => {
@@ -105,16 +131,17 @@ function FontTile({
     return () => {
       cancelled = true;
     };
-  }, [entry, url]);
+  }, [entry, url, nearView]);
 
   return (
     <button
+      ref={tileRef}
       type="button"
       aria-pressed={selected}
       title={entry.label}
       onClick={() => onSelect(entry.id)}
       className={cn(
-        "flex flex-col rounded-xl border bg-white/80 p-2 text-left transition-all hover:-translate-y-0.5",
+        "flex min-w-0 flex-col rounded-xl border bg-white/80 p-2 text-left transition-all hover:-translate-y-0.5",
         selected ? "border-marker ring-2 ring-marker/40" : "border-paper-edge hover:border-ink/25",
       )}
     >
@@ -153,7 +180,11 @@ function FontTile({
  * Qo'lyozma shriftlari galereyasi: har bir plitkada shu shrift bilan chizilgan
  * haqiqiy namuna ko'rsatiladi.
  */
-export function FontGallery({
+/**
+ * Galereya `memo` bilan o'ralgan: Studio'da har bir tugma bosilganda yoki matn
+ * o'zgarganda u qayta chizilmasligi kerak (39 ta plitka qimmat turadi).
+ */
+export const FontGallery = memo(function FontGallery({
   value,
   onChange,
   onPreset,
@@ -180,6 +211,13 @@ export function FontGallery({
   }, [tab, query]);
 
   const cyrillicCount = useMemo(() => FONT_LIBRARY.filter((entry) => entry.cyrillic).length, []);
+  const tiles = useMemo(
+    () =>
+      filtered.map((entry) => (
+        <FontTile key={entry.id} entry={entry} selected={entry.id === value} onSelect={onChange} />
+      )),
+    [filtered, value, onChange],
+  );
 
   return (
     <div className="space-y-4">
@@ -223,14 +261,10 @@ export function FontGallery({
           Bu shartga mos shrift topilmadi — qidiruvni o'zgartirib ko'ring.
         </p>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((entry) => (
-            <FontTile key={entry.id} entry={entry} selected={entry.id === value} onSelect={onChange} />
-          ))}
-        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">{tiles}</div>
       )}
     </div>
   );
-}
+});
 
 export default FontGallery;

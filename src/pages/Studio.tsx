@@ -1,69 +1,60 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  AlertTriangle,
   BookOpen,
-  CheckCircle2,
   ChevronDown,
   Eraser,
-  Loader2,
   PenLine,
+  Ruler,
   RotateCcw,
-  Send,
   Shuffle,
   Sigma,
   Sparkles,
-  X,
+  Wand2,
 } from "lucide-react";
 import { SiteFooter, SiteHeader } from "@/components/site-chrome";
-import { MiniAppWriter } from "@/components/mini-app-writer";
-import { useMiniApp } from "@/hooks/use-mini-app";
-import { cn } from "@/lib/utils";
+import { MiniAppStudio } from "@/components/mini-app-studio";
 import { FontGallery } from "@/components/font-gallery";
 import { NotebookPreview } from "@/components/notebook-preview";
 import { Button } from "@/components/ui/button";
 import { Badge, Segmented, Slider } from "@/components/ui/controls";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label, Textarea } from "@/components/ui/form";
+import { useMiniApp } from "@/hooks/use-mini-app";
 import { useNotebookRender } from "@/hooks/use-notebook-render";
 import { FONT_LIBRARY, fontEntry } from "@/lib/handwriting/fonts.generated";
 import {
+  GEOMETRY_PRESETS,
   INK_OPTIONS,
   PAGE_FORMAT_OPTIONS,
   PAPER_OPTIONS,
+  STYLE_RANGES,
   SUBJECT_PRESETS,
   shuffleHandwriting,
 } from "@/lib/handwriting/options";
+import { MATH_HELP, MATH_SNIPPETS, SAMPLE_LITERATURE, SAMPLE_MATH } from "@/lib/handwriting/samples";
+import {
+  changeCase,
+  collapseBlankLines,
+  removeEmptyLines,
+  statsSummary,
+  textStats,
+  trimLines,
+  type CaseMode,
+} from "@/lib/handwriting/text-tools";
 import { DEFAULT_STYLE, type NotebookStyle } from "@/lib/handwriting/types";
 
-const SAMPLE_LITERATURE = [
-  "Vatan haqida",
-  "",
-  "Vatan — bu faqat tuproq emas, u — bolaligim, onamning ovozi, tonggi shabada.",
-  "Ko'ngil qaysi yurtda bo'lmasin, vatan o'sha yerda boshlanadi.",
-  "",
-  "A. Oripov",
-].join("\n");
-
-const SAMPLE_MATH = [
-  "Mavzu: Kvadrat tenglama",
-  "",
-  "x^2 - 5x + 6 = 0",
-  "D = b^2 - 4ac = 25 - 24 = 1",
-  "",
-  "x_1 = \\frac{5 + 1}{2} = 3",
-  "",
-  "x_2 = \\frac{5 - 1}{2} = 2",
-  "",
-  "Javob: x_1 = 3, x_2 = 2",
-].join("\n");
-
-const MATH_HELP: { syntax: string; text: string }[] = [
-  { syntax: "x^2", text: "yuqori indeks — daraja (kvadrat, kub va boshqalar)" },
-  { syntax: "a_1", text: "pastki indeks — element raqami, indeks" },
-  { syntax: "\\frac{a}{b}", text: "kasr — surat tepada, maxraj pastda, chiziq bilan" },
-  { syntax: "\\sqrt{x}", text: "ildiz belgisi bilan o'ralgan ifoda" },
-];
-
+/**
+ * Studio — brauzerdagi ishchi panel.
+ *
+ * Maket ataylab **butun ekran kengligiga** yoyiladi: chapda asboblar (matn,
+ * sozlamalar, shriftlar), o'ngda natija varag'i. Tor ekranda (telefon) bu ikki
+ * qism ustma-ust tushadi va natija birinchi ko'rinadi.
+ *
+ * Gorizontal siljish bo'lmasligi uchun har bir ustun `min-w-0` bilan
+ * cheklangan: uzun matn yoki keng tugmalar sahifani yon tomonga cho'zmaydi.
+ *
+ * Telegram ichida bu sahifa ishlatilmaydi — u yerda `MiniAppStudio` ochiladi.
+ */
 export default function Studio() {
   const [text, setText] = useState(SAMPLE_LITERATURE);
   const [style, setStyle] = useState<NotebookStyle>(DEFAULT_STYLE);
@@ -74,11 +65,12 @@ export default function Studio() {
 
   const { pages, loading, error, warnings, elapsedMs } = useNotebookRender(text, style);
   const miniApp = useMiniApp();
-  const sending = miniApp.send.status === "sending";
-  /** Botdagi ochiq daftar — matn shunga yoziladi. */
+  /** Botdagi ochiq daftar — Mini App'da matn shunga yoziladi. */
   const activeNotebookId = miniApp.state.state?.activeId ?? null;
   const sideIndex = miniApp.state.state?.side?.sideIndex ?? null;
   const sideNextLine = miniApp.state.state?.side?.nextLine ?? null;
+
+  const stats = textStats(text);
 
   // Boshqa daftar, boshqa bet yoki betga yangi yozuv qo'shilsa (Studio'ning o'zi
   // yoki chatdan), tanlangan qator eskirib qoladi — uni tozalaymiz.
@@ -86,464 +78,481 @@ export default function Studio() {
     setStartLine(null);
   }, [activeNotebookId, sideIndex, sideNextLine]);
 
-  const update = <K extends keyof NotebookStyle>(key: K, value: NotebookStyle[K]) =>
-    setStyle((prev) => ({ ...prev, [key]: value }));
+  const updateStyle = useCallback((patch: Partial<NotebookStyle>) => {
+    setStyle((prev) => ({ ...prev, ...patch }));
+  }, []);
+
+  const resetStyle = useCallback(() => setStyle(DEFAULT_STYLE), []);
 
   /**
-   * Telegram Mini App rejimida: matn, sozlamalar, daftar va qatorni botga yuboradi.
-   *
-   * Yozilgandan keyin tanlangan qator tozalanadi: o'sha qatorlar endi band
-   * (holat qayta o'qiladi) va keyingi matn ulardan davom etishi kerak.
-   */
-  const sendToChat = () => {
-    void miniApp
-      .sendToChat({
-        text,
-        style,
-        notebookId: activeNotebookId ?? undefined,
-        startLine: startLine ?? undefined,
-      })
-      .then((result) => {
-        if (result.ok) setStartLine(null);
-      });
-  };
-
-  /** "Adabiyot" yoki "Matematika" uchun tayyor kombinatsiyani qo'llaydi. */
-  const applyPreset = (presetId: "adabiyot" | "matematika") => {
-    const preset = SUBJECT_PRESETS.find((item) => item.id === presetId);
-    if (!preset) return;
-    setStyle((prev) => ({ ...prev, paper: preset.style.paper, font: preset.style.font }));
-  };
-
-  /**
-   * Matnni almashtiradi (yozish, namuna yoki tozalash).
+   * Matnni almashtiradi (yozish, asbob, namuna yoki tozalash).
    *
    * Oldingi yuborish natijasi xabari yangi matnga tegishli emas — shuning uchun
    * matn o'zgarganda u o'chiriladi.
    */
-  const replaceText = (next: string) => {
-    setText(next);
-    if (miniApp.send.status !== "idle") miniApp.reset();
-  };
+  const replaceText = useCallback(
+    (next: string) => {
+      setText(next);
+      if (miniApp.send.status !== "idle") miniApp.reset();
+    },
+    [miniApp],
+  );
+
+  /** Tanlangan qatorni bosish/qayta bosish. */
+  const pickLine = useCallback((line: number) => {
+    setStartLine((prev) => (prev === line ? null : line));
+  }, []);
+
+  /** Shrift tanlandi (galereya `memo` bo'lgani uchun funksiya barqaror). */
+  const pickFont = useCallback(
+    (font: string) => updateStyle({ font }),
+    [updateStyle],
+  );
+
+  /** «Adabiyot» yoki «Matematika» uchun tayyor kombinatsiyani qo'llaydi. */
+  const applyPreset = useCallback((presetId: "adabiyot" | "matematika") => {
+    const preset = SUBJECT_PRESETS.find((item) => item.id === presetId);
+    if (!preset) return;
+    setStyle((prev) => ({ ...prev, paper: preset.style.paper, font: preset.style.font }));
+  }, []);
 
   /**
    * «Boshqacha yozsin»: yangi urug' bilan boshqa yozuv uslubi tanlanadi.
    * Faqat urug' (seed) o'zgarsa varaqa deyarli bir xil qoladi, shuning uchun
    * shrift ham almashtiriladi — yozuv ko'rinadigan darajada boshqacha chiqadi.
    */
-  const writeDifferently = () => {
+  const writeDifferently = useCallback(() => {
     const seed = Date.now() % 999_999;
     setStyle((prev) => ({ ...prev, ...shuffleHandwriting(prev, seed) }));
-  };
+  }, []);
+
+  /** Matn asboblari: oraliq bo'shliqlar, bo'sh qatorlar va registr. */
+  const runTextTool = useCallback(
+    (tool: "trim" | "collapse" | "stripEmpty" | CaseMode) => {
+      if (tool === "trim") replaceText(trimLines(text));
+      else if (tool === "collapse") replaceText(collapseBlankLines(text));
+      else if (tool === "stripEmpty") replaceText(removeEmptyLines(text));
+      else replaceText(changeCase(text, tool));
+    },
+    [replaceText, text],
+  );
+
+  /**
+   * Telegram Mini App ichida butunlay boshqa ko'rinish ishlatiladi.
+   *
+   * Telegram oynasi tor va baland: brauzerdagi keng maket (ikki ustun, uzun
+   * sozlamalar ro'yxati) bu yerda noqulay bo'lardi. Mini App studiyasida
+   * natija doim ko'rinib turadi, sozlamalar to'rt bo'limga bo'lingan va yuborish
+   * tugmasi pastda yopishib turadi.
+   */
+  if (miniApp.active) {
+    return (
+      <MiniAppStudio
+        text={text}
+        onText={replaceText}
+        style={style}
+        onStyle={updateStyle}
+        onResetStyle={resetStyle}
+        onWriteDifferently={writeDifferently}
+        onPreset={applyPreset}
+        startLine={startLine}
+        onPickLine={pickLine}
+        render={{ pages, loading, error, warnings, elapsedMs }}
+        miniApp={miniApp}
+      />
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col">
       <SiteHeader showBotSetup={false} />
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10">
-        {miniApp.active && (
-          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-marker/40 bg-white/80 px-4 py-3 shadow-note">
-            <div className="flex items-center gap-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-ink text-paper">
-                <Send className="h-4 w-4" />
-              </span>
-              <div className="leading-tight">
-                <p className="text-sm font-semibold text-ink">
-                  {miniApp.userName ?? "Telegram foydalanuvchisi"}
-                </p>
-                <p className="text-xs text-pencil/70">
-                  Mini App rejimi — natijani chatga yuborish mumkin
-                </p>
-              </div>
-            </div>
-            <Button variant="ghost" size="sm" onClick={miniApp.close}>
-              <X className="h-4 w-4" />
-              Yopish
-            </Button>
-          </div>
-        )}
-
-        <div className="mb-8 max-w-3xl">
-          <Badge tone="marker" className="mb-3">
-            <Sparkles className="h-3.5 w-3.5" />
-            Studio — brauzerda ishlaydi, serverga yuborilmaydi
-          </Badge>
-          <h1 className="hand text-4xl leading-tight text-ink sm:text-5xl">
-            Matnni yozing — daftarga qo'lda ko'chirilgan rasm chiqadi
-          </h1>
-          <p className="mt-3 text-[15px] leading-relaxed text-pencil/80">
-            Adabiyot uchun yo'l-yo'l daftar, matematika uchun katak daftar: matnni yozing, uslubni
-            tanlang — varaqalar shu yerda tayyorlanadi.
-          </p>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,440px)_minmax(0,1fr)]">
-          <div className="space-y-6">
-            {/* Telegram Mini App: natijani to'g'ridan-to'g'ri chatga qaytarish.
-                Brauzerda bu karta umuman chiqmaydi: Mini App'ni ulash haqidagi
-                ma'lumot Studio sahifasida ko'rsatilmaydi (batafsil — /bot sahifasida). */}
-            {miniApp.active && (
-              <Card className="border-marker/45 bg-marker-soft/25">
-                <CardHeader>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <CardTitle className="hand text-2xl">Chatga yuborish</CardTitle>
-                      <CardDescription>
-                        Matn va tanlangan sozlamalar botga yuboriladi — varaqalar shu chatga
-                        qaytadi.
-                      </CardDescription>
-                    </div>
-                    <Badge tone="marker">Mini App</Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <Button
-                    variant="marker"
-                    className="w-full"
-                    onClick={sendToChat}
-                    disabled={sending || text.trim().length === 0}
-                  >
-                    {sending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
-                    {sending ? "Yuborilmoqda…" : "Chatga yuborish"}
-                  </Button>
-                  {miniApp.send.message && (
-                    <p
-                      className={cn(
-                        "flex gap-2 rounded-xl border p-3 text-sm",
-                        miniApp.send.status === "sent"
-                          ? "border-sage/40 bg-sage-soft/50 text-ink"
-                          : "border-margin/40 bg-margin-soft/40 text-margin",
-                      )}
-                    >
-                      {miniApp.send.status === "sent" ? (
-                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                      ) : (
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                      )}
-                      <span>{miniApp.send.message}</span>
-                    </p>
-                  )}
-                  <p className="text-xs leading-relaxed text-pencil/65">
-                    Sozlamalar botda ham saqlanadi: keyingi varaqalar shu uslubda chiziladi.
-                    {activeNotebookId
-                      ? startLine
-                        ? ` Matn tanlangan daftarga ${startLine}-qatordan boshlab yoziladi.`
-                        : " Matn pastda tanlangan daftarga yoziladi."
-                      : " Chatda ochiq daftar bo'lsa, matn o'sha daftarga yoziladi."}
-                  </p>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Mini App: qaysi daftarga va qaysi qatordan yozishni tanlash */}
-            {miniApp.active && (
-              <MiniAppWriter
-                bundle={miniApp.state}
-                onReload={(notebookId) => void miniApp.reloadState(notebookId)}
-                startLine={startLine}
-                onPickLine={(line) => setStartLine((prev) => (prev === line ? null : line))}
-                onManage={miniApp.manageNotebook}
-                busy={miniApp.notebookBusy}
-              />
-            )}
-
-            <Card>
-              <CardHeader>
+      <main className="mx-auto flex w-full flex-1 flex-col-reverse gap-4 px-3 py-4 sm:px-5 lg:flex-row lg:items-start lg:gap-5">
+        {/* Chap ustun: asboblar. Tor ekranda natijadan keyin turadi. */}
+        <section className="w-full min-w-0 space-y-4 lg:w-[24rem] lg:shrink-0 xl:w-[26rem]">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle>Matn</CardTitle>
-                <CardDescription>
-                  Har bir yangi qator daftarda alohida satr bo'ladi. Matematik yozuvlar uchun{" "}
-                  <code className="rounded bg-ink/8 px-1.5 py-0.5 text-xs text-ink">^</code>,{" "}
-                  <code className="rounded bg-ink/8 px-1.5 py-0.5 text-xs text-ink">_</code>,{" "}
-                  <code className="rounded bg-ink/8 px-1.5 py-0.5 text-xs text-ink">\frac</code>,{" "}
-                  <code className="rounded bg-ink/8 px-1.5 py-0.5 text-xs text-ink">\sqrt</code>{" "}
-                  ishlatiladi.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <Textarea
-                  rows={12}
-                  value={text}
-                  onChange={(event) => replaceText(event.target.value)}
-                  placeholder="Daftarga ko'chirilishi kerak bo'lgan matnni shu yerga yozing yoki joylashtiring…"
+                <Badge>{statsSummary(stats)}</Badge>
+              </div>
+              <CardDescription>
+                Har bir yangi qator daftarda alohida satr bo'ladi. Matematik yozuvlar uchun{" "}
+                <code className="rounded bg-ink/8 px-1.5 py-0.5 text-xs text-ink">^</code>,{" "}
+                <code className="rounded bg-ink/8 px-1.5 py-0.5 text-xs text-ink">_</code>,{" "}
+                <code className="rounded bg-ink/8 px-1.5 py-0.5 text-xs text-ink">\frac</code>,{" "}
+                <code className="rounded bg-ink/8 px-1.5 py-0.5 text-xs text-ink">\sqrt</code>{" "}
+                ishlatiladi.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Textarea
+                rows={10}
+                value={text}
+                onChange={(event) => replaceText(event.target.value)}
+                placeholder="Daftarga ko'chirilishi kerak bo'lgan matnni shu yerga yozing yoki joylashtiring…"
+              />
+
+              <div className="flex flex-wrap items-center gap-2 text-xs text-pencil/70">
+                <span className="font-semibold text-ink">{stats.filled} qator</span>
+                <span>· {stats.empty} bo'sh</span>
+                <span>· {stats.words} so'z</span>
+                <span>· eng uzuni {stats.longest} belgi</span>
+              </div>
+
+              <div className="space-y-2 rounded-xl border border-paper-edge bg-white/60 p-3">
+                <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-pencil/60">
+                  <Wand2 className="h-3.5 w-3.5 text-marker" />
+                  Matn asboblari
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" size="sm" onClick={() => runTextTool("trim")}>
+                    Bo'shliqni tozalash
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => runTextTool("collapse")}>
+                    Bo'sh qatorlarni birlashtirish
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => runTextTool("stripEmpty")}>
+                    Bo'sh qatorlarni olib tashlash
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => runTextTool("upper")}>
+                    KATTA harf
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => runTextTool("lower")}>
+                    kichik harf
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => runTextTool("title")}>
+                    Bosh harflar
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => replaceText(SAMPLE_LITERATURE)}>
+                  <BookOpen className="h-4 w-4" />
+                  Adabiyot namunasi
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => replaceText(SAMPLE_MATH)}>
+                  <Sigma className="h-4 w-4" />
+                  Matematika namunasi
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => replaceText("")}>
+                  <Eraser className="h-4 w-4" />
+                  Tozalash
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Daftar sozlamalari</CardTitle>
+              <CardDescription>
+                Varaq, siyoh va o'lchamlarni tanlang — yozuv uslubi pastdagi galereyada.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div>
+                <Label>Daftar turi</Label>
+                <Segmented
+                  className="w-full"
+                  value={style.paper}
+                  onChange={(value) => updateStyle({ paper: value })}
+                  options={PAPER_OPTIONS}
                 />
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-xs font-semibold uppercase tracking-wide text-pencil/60">
-                    {text.length} belgi · {pages.length || 1} varaq
-                  </span>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => replaceText(SAMPLE_LITERATURE)}
-                    >
-                      <BookOpen className="h-4 w-4" />
-                      Adabiyot namunasi
-                    </Button>
-                    <Button variant="outline" size="sm" onClick={() => replaceText(SAMPLE_MATH)}>
-                      <Sigma className="h-4 w-4" />
-                      Matematika namunasi
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => replaceText("")}>
-                      <Eraser className="h-4 w-4" />
-                      Tozalash
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+              </div>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Daftar sozlamalari</CardTitle>
-                <CardDescription>
-                  Varaq, siyoh va o'lchamlarni tanlang — yozuv uslubi pastdagi galereyada.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div>
-                  <Label>Daftar turi</Label>
-                  <Segmented
-                    className="w-full"
-                    value={style.paper}
-                    onChange={(value) => update("paper", value)}
-                    options={PAPER_OPTIONS}
-                  />
+              <div>
+                <Label>Siyoh rangi</Label>
+                <div className="flex flex-wrap gap-2">
+                  {INK_OPTIONS.map((option) => {
+                    const active = option.id === style.ink;
+                    return (
+                      <button
+                        key={option.id}
+                        type="button"
+                        title={option.label}
+                        aria-label={option.label}
+                        onClick={() => updateStyle({ ink: option.id })}
+                        className={
+                          "flex h-10 w-10 items-center justify-center rounded-xl border bg-white transition-all " +
+                          (active
+                            ? "border-marker ring-2 ring-marker/40"
+                            : "border-ink/15 hover:border-ink/35")
+                        }
+                      >
+                        <span
+                          className="h-5 w-5 rounded-full"
+                          style={{ backgroundColor: option.hex }}
+                        />
+                      </button>
+                    );
+                  })}
                 </div>
+              </div>
 
-                <div>
-                  <Label>Siyoh rangi</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {INK_OPTIONS.map((option) => {
-                      const active = option.id === style.ink;
-                      return (
-                        <button
-                          key={option.id}
-                          type="button"
-                          title={option.label}
-                          onClick={() => update("ink", option.id)}
-                          className={
-                            "flex h-10 w-10 items-center justify-center rounded-xl border bg-white transition-all " +
-                            (active
-                              ? "border-marker ring-2 ring-marker/40"
-                              : "border-ink/15 hover:border-ink/35")
-                          }
-                        >
-                          <span
-                            className="h-5 w-5 rounded-full"
-                            style={{ backgroundColor: option.hex }}
-                          />
-                        </button>
-                      );
-                    })}
-                  </div>
+              <div>
+                <Label>Varaq formati</Label>
+                <Segmented
+                  className="w-full"
+                  value={style.pageFormat}
+                  onChange={(value) => updateStyle({ pageFormat: value })}
+                  options={PAGE_FORMAT_OPTIONS}
+                />
+              </div>
+
+              <div className="space-y-3 rounded-xl border border-paper-edge bg-white/60 p-4">
+                <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-pencil/60">
+                  <Ruler className="h-3.5 w-3.5 text-marker" />
+                  Tayyor o'lchamlar
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {GEOMETRY_PRESETS.map((preset) => {
+                    const active =
+                      preset.style.fontSize === style.fontSize &&
+                      preset.style.lineGap === style.lineGap &&
+                      preset.style.marginLeft === style.marginLeft;
+                    return (
+                      <Button
+                        key={preset.id}
+                        variant={active ? "marker" : "outline"}
+                        size="sm"
+                        title={preset.hint}
+                        onClick={() => updateStyle(preset.style)}
+                      >
+                        {preset.label}
+                      </Button>
+                    );
+                  })}
                 </div>
 
                 <div>
-                  <Label>Varaq formati</Label>
-                  <Segmented
-                    className="w-full"
-                    value={style.pageFormat}
-                    onChange={(value) => update("pageFormat", value)}
-                    options={PAGE_FORMAT_OPTIONS}
+                  <div className="flex items-center justify-between">
+                    <Label className="mb-0">Harf o'lchami</Label>
+                    <span className="text-xs font-semibold text-ink">{style.fontSize} px</span>
+                  </div>
+                  <Slider
+                    className="mt-2"
+                    min={STYLE_RANGES.fontSize.min}
+                    max={STYLE_RANGES.fontSize.max}
+                    value={style.fontSize}
+                    onChange={(value) => updateStyle({ fontSize: value })}
                   />
                 </div>
-
-                <div className="space-y-4 rounded-xl border border-paper-edge bg-white/60 p-4">
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <Label className="mb-0">Harf o'lchami</Label>
-                      <span className="text-xs font-semibold text-ink">{style.fontSize} px</span>
-                    </div>
-                    <Slider
-                      className="mt-2"
-                      min={26}
-                      max={52}
-                      value={style.fontSize}
-                      onChange={(value) => update("fontSize", value)}
-                    />
+                <div>
+                  <div className="flex items-center justify-between">
+                    <Label className="mb-0">Qatorlar orasi</Label>
+                    <span className="text-xs font-semibold text-ink">{style.lineGap} px</span>
                   </div>
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <Label className="mb-0">Qatorlar orasi</Label>
-                      <span className="text-xs font-semibold text-ink">{style.lineGap} px</span>
-                    </div>
-                    <Slider
-                      className="mt-2"
-                      min={40}
-                      max={80}
-                      value={style.lineGap}
-                      onChange={(value) => update("lineGap", value)}
-                    />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <Label className="mb-0">Chap chegara</Label>
-                      <span className="text-xs font-semibold text-ink">{style.marginLeft} px</span>
-                    </div>
-                    <Slider
-                      className="mt-2"
-                      min={60}
-                      max={180}
-                      value={style.marginLeft}
-                      onChange={(value) => update("marginLeft", value)}
-                    />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between">
-                      <Label className="mb-0">Qo'lyozma jonliligi</Label>
-                      <span className="text-xs font-semibold text-ink">
-                        {Math.round(style.wobble * 100)}%
-                      </span>
-                    </div>
-                    <Slider
-                      className="mt-2"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={style.wobble}
-                      onChange={(value) => update("wobble", value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-5">
-                  <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-ink">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 rounded border-ink/30 accent-marker"
-                      checked={style.marginLine}
-                      onChange={(event) => update("marginLine", event.target.checked)}
-                    />
-                    Qizil chegara chizig'i
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-ink">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 rounded border-ink/30 accent-marker"
-                      checked={style.mathMode}
-                      onChange={(event) => update("mathMode", event.target.checked)}
-                    />
-                    Matematika yozuvi
-                  </label>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="sage" size="sm" onClick={writeDifferently}>
-                    <Shuffle className="h-4 w-4" />
-                    Boshqacha yozsin
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={() => setStyle(DEFAULT_STYLE)}>
-                    <RotateCcw className="h-4 w-4" />
-                    Standart
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="p-0">
-              <button
-                type="button"
-                onClick={() => setShowFonts((prev) => !prev)}
-                className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left"
-              >
-                <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ink">
-                  <PenLine className="h-4 w-4 shrink-0 text-marker" />
-                  <span className="truncate">
-                    Yozuv uslubi — {fontEntry(style.font)?.label ?? style.font}
-                  </span>
-                </span>
-                <span className="flex shrink-0 items-center gap-2">
-                  <Badge tone="marker" className="text-[10px]">
-                    {FONT_LIBRARY.length} shrift
-                  </Badge>
-                  <ChevronDown
-                    className={
-                      "h-4 w-4 text-ink/50 transition-transform " + (showFonts ? "rotate-180" : "")
-                    }
-                  />
-                </span>
-              </button>
-              {showFonts && (
-                <div className="border-t border-paper-edge px-6 py-5">
-                  <FontGallery
-                    value={style.font}
-                    onChange={(font) => update("font", font)}
-                    onPreset={applyPreset}
+                  <Slider
+                    className="mt-2"
+                    min={STYLE_RANGES.lineGap.min}
+                    max={STYLE_RANGES.lineGap.max}
+                    value={style.lineGap}
+                    onChange={(value) => updateStyle({ lineGap: value })}
                   />
                 </div>
-              )}
-            </Card>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <Label className="mb-0">Chap chegara</Label>
+                    <span className="text-xs font-semibold text-ink">{style.marginLeft} px</span>
+                  </div>
+                  <Slider
+                    className="mt-2"
+                    min={STYLE_RANGES.marginLeft.min}
+                    max={STYLE_RANGES.marginLeft.max}
+                    value={style.marginLeft}
+                    onChange={(value) => updateStyle({ marginLeft: value })}
+                  />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <Label className="mb-0">Qo'lyozma jonliligi</Label>
+                    <span className="text-xs font-semibold text-ink">
+                      {Math.round(style.wobble * 100)}%
+                    </span>
+                  </div>
+                  <Slider
+                    className="mt-2"
+                    min={STYLE_RANGES.wobble.min}
+                    max={STYLE_RANGES.wobble.max}
+                    step={0.05}
+                    value={style.wobble}
+                    onChange={(value) => updateStyle({ wobble: value })}
+                  />
+                </div>
+              </div>
 
-            <Card className="p-0">
-              <button
-                type="button"
-                onClick={() => setShowMathHelp((prev) => !prev)}
-                className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left"
-              >
-                <span className="flex items-center gap-2 text-sm font-semibold text-ink">
-                  <Sigma className="h-4 w-4 text-marker" />
-                  Matematika yozuvi qanday yoziladi?
+              <div className="flex flex-wrap gap-5">
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-ink">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-ink/30 accent-marker"
+                    checked={style.marginLine}
+                    onChange={(event) => updateStyle({ marginLine: event.target.checked })}
+                  />
+                  Qizil chegara chizig'i
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium text-ink">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-ink/30 accent-marker"
+                    checked={style.mathMode}
+                    onChange={(event) => updateStyle({ mathMode: event.target.checked })}
+                  />
+                  Matematika yozuvi
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="sage" size="sm" onClick={writeDifferently}>
+                  <Shuffle className="h-4 w-4" />
+                  Boshqacha yozsin
+                </Button>
+                <Button variant="ghost" size="sm" onClick={resetStyle}>
+                  <RotateCcw className="h-4 w-4" />
+                  Standart
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="p-0">
+            <button
+              type="button"
+              onClick={() => setShowFonts((prev) => !prev)}
+              className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left"
+            >
+              <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ink">
+                <PenLine className="h-4 w-4 shrink-0 text-marker" />
+                <span className="truncate">
+                  Yozuv uslubi — {fontEntry(style.font)?.label ?? style.font}
                 </span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <Badge tone="marker" className="text-[10px]">
+                  {FONT_LIBRARY.length} shrift
+                </Badge>
                 <ChevronDown
                   className={
-                    "h-4 w-4 text-ink/50 transition-transform " + (showMathHelp ? "rotate-180" : "")
+                    "h-4 w-4 text-ink/50 transition-transform " + (showFonts ? "rotate-180" : "")
                   }
                 />
-              </button>
-              {showMathHelp && (
-                <div className="space-y-3 border-t border-paper-edge px-6 py-4">
-                  {MATH_HELP.map((item) => (
-                    <div key={item.syntax} className="flex flex-wrap items-baseline gap-2">
-                      <code className="rounded-lg bg-ink/8 px-2 py-1 font-mono text-xs text-ink">
-                        {item.syntax}
-                      </code>
-                      <span className="text-sm text-pencil/75">{item.text}</span>
-                    </div>
+              </span>
+            </button>
+            {showFonts && (
+              <div className="border-t border-paper-edge px-4 py-5 sm:px-6">
+                <FontGallery value={style.font} onChange={pickFont} onPreset={applyPreset} />
+              </div>
+            )}
+          </Card>
+
+          <Card className="p-0">
+            <button
+              type="button"
+              onClick={() => setShowMathHelp((prev) => !prev)}
+              className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left"
+            >
+              <span className="flex min-w-0 items-center gap-2 text-sm font-semibold text-ink">
+                <Sigma className="h-4 w-4 shrink-0 text-marker" />
+                Matematika yozuvi qanday yoziladi?
+              </span>
+              <ChevronDown
+                className={
+                  "h-4 w-4 shrink-0 text-ink/50 transition-transform " +
+                  (showMathHelp ? "rotate-180" : "")
+                }
+              />
+            </button>
+            {showMathHelp && (
+              <div className="space-y-3 border-t border-paper-edge px-4 py-4 sm:px-6">
+                <div className="flex flex-wrap gap-1.5">
+                  {MATH_SNIPPETS.map((snippet) => (
+                    <button
+                      key={snippet}
+                      type="button"
+                      title="Matnga qo'shish"
+                      onClick={() => replaceText(`${text}${snippet}`)}
+                      className="rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 font-mono text-xs text-ink transition-colors hover:border-ink/40"
+                    >
+                      {snippet}
+                    </button>
                   ))}
-                  <p className="text-xs text-pencil/60">
-                    Karta ichida belgilar ham chiziladi: √ ∫ ∑ ± × ÷ ≤ ≥ ≠ ∞ π ° ∠ ⊥ ∥ → ⇒.
-                  </p>
                 </div>
-              )}
-            </Card>
+                {MATH_HELP.map((item) => (
+                  <div key={item.syntax} className="flex flex-wrap items-baseline gap-2">
+                    <code className="rounded-lg bg-ink/8 px-2 py-1 font-mono text-xs text-ink">
+                      {item.syntax}
+                    </code>
+                    <span className="min-w-0 text-sm text-pencil/75">{item.text}</span>
+                  </div>
+                ))}
+                <p className="text-xs text-pencil/60">
+                  Karta ichida belgilar ham chiziladi: √ ∫ ∑ ± × ÷ ≤ ≥ ≠ ∞ π ° ∠ ⊥ ∥ → ⇒.
+                </p>
+              </div>
+            )}
+          </Card>
+        </section>
+
+        {/* O'ng ustun: natija. Ekranning qolgan kengligini to'liq egallaydi. */}
+        <section className="w-full min-w-0 space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="min-w-0">
+              <Badge tone="marker" className="mb-2">
+                <Sparkles className="h-3.5 w-3.5" />
+                Studio — brauzerda ishlaydi, serverga yuborilmaydi
+              </Badge>
+              <h1 className="hand text-3xl leading-tight text-ink sm:text-4xl">
+                Matnni yozing — daftarga qo'lda ko'chirilgan rasm chiqadi
+              </h1>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => applyPreset("adabiyot")}>
+                Adabiyot uchun
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => applyPreset("matematika")}>
+                Matematika uchun
+              </Button>
+              <Button variant="sage" size="sm" onClick={writeDifferently}>
+                <Shuffle className="h-4 w-4" />
+                Boshqacha yozsin
+              </Button>
+            </div>
           </div>
 
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <CardTitle>Natija</CardTitle>
-                    <CardDescription>
-                      Tanlangan formatda, 150 dpi — ekranda ko'rish va chop etish uchun.
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {elapsedMs !== null && <Badge tone="sage">{elapsedMs} ms</Badge>}
-                    <Badge>{fontEntry(style.font)?.label ?? style.font}</Badge>
-                    <Badge>{pages.length} varaq</Badge>
-                  </div>
+          <Card className="min-w-0">
+            <CardHeader>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <CardTitle>Natija</CardTitle>
+                  <CardDescription>
+                    150 dpi — varaqani shu yerda ko'ring, kattalashtiring yoki yuklab oling.
+                  </CardDescription>
                 </div>
-              </CardHeader>
-              <CardContent>
-                <NotebookPreview
-                  pages={pages}
-                  loading={loading}
-                  error={error}
-                  warnings={warnings}
-                  emptyHint="Matn yozing — daftar varaqasi shu yerda paydo bo'ladi."
-                />
-              </CardContent>
-            </Card>
+                <div className="flex flex-wrap items-center gap-2">
+                  {elapsedMs !== null && <Badge tone="sage">{elapsedMs} ms</Badge>}
+                  <Badge className="max-w-[12rem] truncate">
+                    {fontEntry(style.font)?.label ?? style.font}
+                  </Badge>
+                  <Badge>{pages.length} varaq</Badge>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="min-w-0">
+              <NotebookPreview
+                pages={pages}
+                loading={loading}
+                error={error}
+                warnings={warnings}
+                emptyHint="Matn yozing — daftar varaqasi shu yerda paydo bo'ladi."
+              />
+            </CardContent>
+          </Card>
 
-            {/* Mini App'ni ulashga oid hech qanday bo'lim bu sahifada ataylab yo'q:
-                qo'llanma /bot sahifasida. */}
-          </div>
-        </div>
+          {/* Mini App'ni ulashga oid hech qanday bo'lim bu sahifada ataylab yo'q:
+              qo'llanma /bot sahifasida. */}
+        </section>
       </main>
 
       <SiteFooter showBotSetup={false} />

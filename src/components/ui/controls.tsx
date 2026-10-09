@@ -34,8 +34,15 @@ export function Segmented<T extends string>({
   options: { id: T; label: string; hint?: string }[];
   className?: string;
 }) {
+  // `max-w-full` va `flex-wrap`: tor ekranda (Telegram oynasi) uzun variantlar
+  // butun sahifani gorizontal siljitib yubormasin — ular keyingi qatorga o'tadi.
   return (
-    <div className={cn("inline-flex rounded-xl border border-ink/15 bg-white/70 p-1", className)}>
+    <div
+      className={cn(
+        "inline-flex max-w-full flex-wrap rounded-xl border border-ink/15 bg-white/70 p-1",
+        className,
+      )}
+    >
       {options.map((option) => {
         const active = option.id === value;
         return (
@@ -45,7 +52,7 @@ export function Segmented<T extends string>({
             title={option.hint}
             onClick={() => onChange(option.id)}
             className={cn(
-              "rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors",
+              "whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors",
               active ? "bg-ink text-paper shadow-sm" : "text-ink/60 hover:text-ink",
             )}
           >
@@ -54,6 +61,50 @@ export function Segmented<T extends string>({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Yoqish/o'chirish tugmasi (switch).
+ *
+ * Mini App'da checkbox mayda bo'lib qoladi va barmoq bilan bosish qiyin —
+ * shuning uchun kattaroq, sirg'anadigan tugma ishlatiladi. Holat `aria-pressed`
+ * orqali ham aytiladi.
+ */
+export function Switch({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  hint?: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={checked}
+      title={hint}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between gap-3 text-left text-sm font-medium text-ink"
+    >
+      <span className="min-w-0">{label}</span>
+      <span
+        className={cn(
+          "flex h-6 w-11 shrink-0 items-center rounded-full px-0.5 transition-colors",
+          checked ? "bg-marker" : "bg-ink/15",
+        )}
+      >
+        <span
+          className={cn(
+            "h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
+            checked && "translate-x-5",
+          )}
+        />
+      </span>
+    </button>
   );
 }
 

@@ -84,6 +84,47 @@ export const SUBJECT_PRESETS: {
   },
 ];
 
+/**
+ * Geometriya tayyorliklari: harf o'lchami, qatorlar orasi va chap chegara.
+ *
+ * Qiymatlar Studiodagi surilmalar oraliqlari ichida (26–52 / 40–80 / 60–180) va
+ * `"orta"` aynan `DEFAULT_STYLE` ga to'g'ri keladi — tekshiruv shuni
+ * qo'riqlaydi (`scripts/check-text.ts`).
+ */
+export const GEOMETRY_PRESETS: {
+  id: "zich" | "orta" | "keng";
+  label: string;
+  hint: string;
+  style: Pick<NotebookStyle, "fontSize" | "lineGap" | "marginLeft">;
+}[] = [
+  {
+    id: "zich",
+    label: "Zich",
+    hint: "Kichikroq harf, qatorlar yaqin — varaqaga ko'proq matn sig'adi",
+    style: { fontSize: 30, lineGap: 44, marginLeft: 90 },
+  },
+  {
+    id: "orta",
+    label: "O'rta",
+    hint: "Standart ko'rinish — kundalik daftar",
+    style: { fontSize: 34, lineGap: 56, marginLeft: 120 },
+  },
+  {
+    id: "keng",
+    label: "Keng",
+    hint: "Kattaroq harf, qatorlar ochiq — o'qish oson",
+    style: { fontSize: 44, lineGap: 72, marginLeft: 150 },
+  },
+];
+
+/** Surilmalar oraliqlari (Studio, Mini App studiyasi va tekshiruv uchun bir xil). */
+export const STYLE_RANGES = {
+  fontSize: { min: 26, max: 52 },
+  lineGap: { min: 40, max: 80 },
+  marginLeft: { min: 60, max: 180 },
+  wobble: { min: 0, max: 1 },
+} as const;
+
 export const PAGE_FORMAT_OPTIONS: { id: PageFormat; label: string; width: number; height: number }[] = [
   { id: "a4", label: "A4", width: 1240, height: 1754 },
   { id: "a5", label: "A5", width: 874, height: 1240 },
