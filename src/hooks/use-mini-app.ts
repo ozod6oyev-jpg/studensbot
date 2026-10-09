@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   fetchNotebookState,
   getTelegramWebApp,
@@ -72,6 +72,15 @@ export function useMiniApp() {
     message: null,
   });
 
+  /**
+   * `reloadState` ning eng oxirgi nusxasi.
+   *
+   * Hodisa tinglovchilari (Telegram «activate», `visibilitychange`) bir marta
+   * ro'yxatdan o'tadi, lekin har doim eng yangi funksiyani chaqirishi kerak —
+   * shu sababli funksiya ref orqali olinadi.
+   */
+  const reloadStateRef = useRef<(notebookId?: string | null) => Promise<void>>(async () => undefined);
+
   useEffect(() => {
     if (!active) return;
     const app = getTelegramWebApp();
@@ -88,24 +97,51 @@ export function useMiniApp() {
       // Eski Telegram versiyalari bu metodlarni bilmasligi mumkin.
     }
 
+    // Telegram Mini App'ni yopmasdan orqaga qaytaradi: foydalanuvchi chatda
+    // matn yuborgan bo'lsa, daftar holati o'zgargan bo'ladi — qaytganda yangilaymiz.
+    const onActivate = () => {
+      void reloadStateRef.current();
+    };
+    app.onEvent?.("activate", onActivate);
+
     document.body.classList.add("mini-app");
-    return () => document.body.classList.remove("mini-app");
+    return () => {
+      app.offEvent?.("activate", onActivate);
+      document.body.classList.remove("mini-app");
+    };
   }, [active]);
+
+  /**
+   * So'rovlar tartibi: holat bir necha joydan yangilanadi (ochilish, Telegram
+   * «activate», `visibilitychange`, daftar tanlash, yuborishdan keyin). Sekin
+   * kelgan eski javob yangisini bosib ketmasligi kerak — shuning uchun har bir
+   * so'rovga tartib raqami beriladi va faqat oxirgisi holatga yoziladi.
+   */
+  const requestIdRef = useRef(0);
 
   /** Daftarlar ro'yxatini (va tanlangan daftarning joriy betini) yangilaydi. */
   const reloadState = useCallback(async (notebookId?: string | null): Promise<void> => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+
     setState((prev) => ({ status: "loading", state: prev.state, message: null }));
     const result = await fetchNotebookState(notebookId);
+    if (requestId !== requestIdRef.current) return;
+
     if (result.ok) {
       setState({ status: "ready", state: result.state ?? null, message: null });
       return;
     }
-    setState({
+    // Xato bo'lsa ham oxirgi ma'lum ro'yxat qoldiriladi: foydalanuvchi daftarni
+    // tanlashda davom eta oladi, xato esa alohida ko'rsatiladi.
+    setState((prev) => ({
       status: "error",
-      state: null,
+      state: prev.state,
       message: result.message ?? "Daftarlar ro'yxatini olib bo'lmadi.",
-    });
+    }));
   }, []);
+
+  reloadStateRef.current = reloadState;
 
   // Mini App ochilishi bilan daftarlar ro'yxati ko'rinib turishi kerak —
   // foydalanuvchi qo'shimcha tugma bosmasin. Brauzerda so'rov yuborilmaydi.
@@ -114,14 +150,31 @@ export function useMiniApp() {
     void reloadState();
   }, [active, reloadState]);
 
-  const sendToChat = useCallback(async (payload: MiniAppSendPayload): Promise<MiniAppSendResult> => {
-    setSend({ status: "sending", message: null });
-    const result = await postToChat(payload);
-    if (result.ok) haptic("success");
-    else haptic("error");
-    setSend({ status: result.ok ? "sent" : "error", message: result.message });
-    return result;
-  }, []);
+  // Foydalanuvchi boshqa ilovaga o'tib, keyin Studio'ga qaytsa (yoki Telegram
+  // oynasi qayta ko'rinsa) holat eskirgan bo'lishi mumkin — qayta o'qiymiz.
+  useEffect(() => {
+    if (!active) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void reloadStateRef.current();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [active]);
+
+  const sendToChat = useCallback(
+    async (payload: MiniAppSendPayload): Promise<MiniAppSendResult> => {
+      setSend({ status: "sending", message: null });
+      const result = await postToChat(payload);
+      if (result.ok) haptic("success");
+      else haptic("error");
+      setSend({ status: result.ok ? "sent" : "error", message: result.message });
+      // Yozilgandan keyin daftar o'zgaradi (bet band bo'ldi, keyingi qator surildi):
+      // Studio eski varaqani va eski qatorni ko'rsatib qolmasligi kerak.
+      if (result.ok) await reloadStateRef.current(payload.notebookId ?? undefined);
+      return result;
+    },
+    [],
+  );
 
   /**
    * Daftar bilan amal bajaradi (yangi daftar, nom, o'chirish, undo, kitob) va

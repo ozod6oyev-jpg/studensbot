@@ -5,6 +5,8 @@
  *  1. `bot/mini-app.ts` — `initData` imzosi: to'g'ri imzo qabul qilinadi;
  *     boshqa token, keyin o'zgartirilgan maydon, eskirgan va umuman imzosiz
  *     ma'lumot rad etiladi; `parseInitData()` va `originFromUrl()` to'g'ri;
+ *     matn chegarasi Studio bilan bir xil va chegaradan uzun matn jimgina
+ *     qisqartirilmaydi — 400 bilan rad etiladi (Studio ham uni o'zi to'xtatadi);
  *  2. haqiqiy bot jarayoni (`bot/index.ts`, `MINI_APP_URL` berilgan holda):
  *     · bot `setChatMenuButton` ni `web_app` turida chaqiradi (matn maydoni
  *       yonidagi tugma);
@@ -39,13 +41,14 @@
 import { createHmac } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   HEALTH_PATH,
   MAX_INIT_DATA_AGE_SECONDS,
+  MAX_MINI_APP_CHARS,
   MINI_APP_NOTEBOOK_PATH,
   MINI_APP_PATH,
   MINI_APP_STATE_PATH,
@@ -490,11 +493,38 @@ function checkInitData(): void {
 }
 
 /* ------------------------------------------------------------------ */
+/* 1b-qism: matn chegarasi (Studio va bot bir xil bo'lishi kerak)       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Studio (brauzer) va bot alohida joyda ishlaydi, lekin matn chegarasi bir xil
+ * bo'lishi shart: Studio chegaradan uzun matnni yubormaydi (o'zi aytadi), bot esa
+ * uni rad etadi. Shu sababli `MINI_APP_TEXT_LIMIT` (src) va `MAX_MINI_APP_CHARS`
+ * (bot) solishtiriladi.
+ */
+async function checkTextLimit(): Promise<void> {
+  console.log("\n=== 1b-qism: matn chegarasi ===");
+  const clientFile = fileURLToPath(new URL("../src/lib/telegram/mini-app.ts", import.meta.url));
+  const client = await readFile(clientFile, "utf8");
+  const match = /MINI_APP_TEXT_LIMIT\s*=\s*(\d+)/.exec(client);
+  assert(match !== null, "Studio'dagi MINI_APP_TEXT_LIMIT topildi");
+  assert(
+    Number(match?.[1]) === MAX_MINI_APP_CHARS,
+    `Studio va bot chegarasi bir xil (Studio ${match?.[1]}, bot ${MAX_MINI_APP_CHARS})`,
+  );
+  assert(
+    /text\.length\s*>\s*MINI_APP_TEXT_LIMIT/.test(client),
+    "Studio chegaradan uzun matnni o'zi to'xtatadi (botga yubormaydi)",
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* 2-qism: bot + HTTP endpoint (mock Telegram API)                      */
 /* ------------------------------------------------------------------ */
 
 async function main(): Promise<void> {
   checkInitData();
+  await checkTextLimit();
 
   console.log("\n=== 2-qism: bot, Mini App tugmasi va /mini-app/send ===");
   const mock = await startMockTelegram();
@@ -748,6 +778,20 @@ async function main(): Promise<void> {
     assert(noInit.status === 401, `initData'siz so'rov 401 (${noInit.status})`);
     const empty = await postSend(apiPort, { initData, text: "   " });
     assert(empty.status === 400, `bo'sh matn 400 (${empty.status})`);
+    // Chegaradan uzun matn jimgina qisqartirilmaydi — 400 bilan rad etiladi.
+    const tooLong = await postSend(apiPort, {
+      initData,
+      text: "a".repeat(MAX_MINI_APP_CHARS + 1),
+    });
+    assert(
+      tooLong.status === 400 && tooLong.body.ok !== true,
+      `chegaradan uzun matn rad etildi (${tooLong.status}: "${tooLong.body.message ?? tooLong.body.error}")`,
+    );
+    assert(
+      (tooLong.body.message ?? "").includes(String(MAX_MINI_APP_CHARS + 1)) &&
+        (tooLong.body.message ?? "").includes(String(MAX_MINI_APP_CHARS)),
+      `xabar matn uzunligini va chegarani aytdi ("${tooLong.body.message}")`,
+    );
     const notPost = await fetch(`http://127.0.0.1:${apiPort}${MINI_APP_PATH}`);
     assert(notPost.status === 405, `GET ${MINI_APP_PATH} → 405 (${notPost.status})`);
     assert(

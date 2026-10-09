@@ -79,23 +79,34 @@ export default function Studio() {
   /** Botdagi ochiq daftar — matn shunga yoziladi. */
   const activeNotebookId = miniApp.state.state?.activeId ?? null;
   const sideIndex = miniApp.state.state?.side?.sideIndex ?? null;
+  const sideNextLine = miniApp.state.state?.side?.nextLine ?? null;
 
-  // Boshqa daftar (yoki boshqa bet) tanlansa, oldingi qator tanlovi eskirib qoladi.
+  // Boshqa daftar, boshqa bet yoki betga yangi yozuv qo'shilsa (Studio'ning o'zi
+  // yoki chatdan), tanlangan qator eskirib qoladi — uni tozalaymiz.
   useEffect(() => {
     setStartLine(null);
-  }, [activeNotebookId, sideIndex]);
+  }, [activeNotebookId, sideIndex, sideNextLine]);
 
   const update = <K extends keyof NotebookStyle>(key: K, value: NotebookStyle[K]) =>
     setStyle((prev) => ({ ...prev, [key]: value }));
 
-  /** Telegram Mini App rejimida: matn, sozlamalar, daftar va qatorni botga yuboradi. */
+  /**
+   * Telegram Mini App rejimida: matn, sozlamalar, daftar va qatorni botga yuboradi.
+   *
+   * Yozilgandan keyin tanlangan qator tozalanadi: o'sha qatorlar endi band
+   * (holat qayta o'qiladi) va keyingi matn ulardan davom etishi kerak.
+   */
   const sendToChat = () => {
-    void miniApp.sendToChat({
-      text,
-      style,
-      notebookId: activeNotebookId ?? undefined,
-      startLine: startLine ?? undefined,
-    });
+    void miniApp
+      .sendToChat({
+        text,
+        style,
+        notebookId: activeNotebookId ?? undefined,
+        startLine: startLine ?? undefined,
+      })
+      .then((result) => {
+        if (result.ok) setStartLine(null);
+      });
   };
 
   /** "Adabiyot" yoki "Matematika" uchun tayyor kombinatsiyani qo'llaydi. */
@@ -246,7 +257,7 @@ export default function Studio() {
                 bundle={miniApp.state}
                 onReload={(notebookId) => void miniApp.reloadState(notebookId)}
                 startLine={startLine}
-                onPickLine={setStartLine}
+                onPickLine={(line) => setStartLine((prev) => (prev === line ? null : line))}
                 onManage={miniApp.manageNotebook}
                 busy={miniApp.notebookBusy}
               />
@@ -268,7 +279,12 @@ export default function Studio() {
                 <Textarea
                   rows={12}
                   value={text}
-                  onChange={(event) => setText(event.target.value)}
+                  onChange={(event) => {
+                    setText(event.target.value);
+                    // Matn o'zgardi — oldingi "yuborildi" (yoki xato) xabari endi
+                    // yangi matnga tegishli emas, shuning uchun o'chiriladi.
+                    if (miniApp.send.status !== "idle") miniApp.reset();
+                  }}
                   placeholder="Daftarga ko'chirilishi kerak bo'lgan matnni shu yerga yozing yoki joylashtiring…"
                 />
                 <div className="flex flex-wrap items-center justify-between gap-3">

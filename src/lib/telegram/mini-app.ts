@@ -10,7 +10,16 @@
  * ochilganda `window.Telegram.WebApp` ni o'zi yaratadi. Skript ulanmagan bo'lsa
  * (oddiy brauzer), hamma funksiya xavfsiz `null`/`false` qaytaradi.
  */
-import type { NotebookStyle, PaperType } from "@/lib/handwriting/types";
+import { fontEntry } from "@/lib/handwriting/fonts.generated";
+import { INK_OPTIONS, PAGE_FORMAT_OPTIONS, PAPER_OPTIONS } from "@/lib/handwriting/options";
+import type {
+  InkColor,
+  NotebookStyle,
+  PageFormat,
+  PageSide,
+  PaperType,
+  PersonalStyle,
+} from "@/lib/handwriting/types";
 
 /* ------------------------------------------------------------------ */
 /* SDK tiplari (kerakli qismi)                                          */
@@ -67,6 +76,7 @@ export interface TelegramWebApp {
   setHeaderColor?(color: string): void;
   setBackgroundColor?(color: string): void;
   onEvent?(event: string, handler: () => void): void;
+  offEvent?(event: string, handler: () => void): void;
   HapticFeedback?: TelegramHapticFeedback;
 }
 
@@ -136,6 +146,16 @@ export const MINI_APP_NOTEBOOK_ENDPOINT =
   (import.meta.env.VITE_MINI_APP_NOTEBOOK_ENDPOINT as string | undefined)?.trim() ||
   "/mini-app/notebook";
 
+/**
+ * Yuboriladigan matnning eng katta uzunligi.
+ *
+ * Botdagi `MAX_MINI_APP_CHARS` bilan **bir xil** bo'lishi kerak: chegaradan uzun
+ * matnni bot 400 bilan rad etadi (jimgina qisqartirilmaydi), shuning uchun
+ * Studio ham tugmani o'chirib, sababini shu yerda aytadi.
+ * `check:mini-app` ikkala qiymat mos kelishini tekshiradi.
+ */
+export const MINI_APP_TEXT_LIMIT = 4000;
+
 export interface MiniAppSendPayload {
   /** Daftarga yoziladigan matn. */
   text: string;
@@ -145,6 +165,119 @@ export interface MiniAppSendPayload {
   notebookId?: string;
   /** Nechanchi qatordan yozish (1 dan boshlab). */
   startLine?: number;
+}
+
+/* ------------------------------------------------------------------ */
+/* Uslubni tekshirish (botdan kelgan ma'lumot ishonchsiz)               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Sonni xavfsiz oraliqqa keltiradi (chetdagi qiymat qabul qilinadi).
+ *
+ * Botdan kelgan uslub chat sozlamalaridan o'qiladi: eski versiyada saqlangan
+ * yoki qo'lda tahrirlangan faylda kutilmagan qiymat bo'lishi mumkin. Bunday
+ * qiymat bilan varaqa chizish yoki qatorlar ro'yxatini tayyorlash cheksiz
+ * davom etishi mumkin (`linesPerPageFor()` `lineGap` ga bo'ladi), shuning uchun
+ * oraliqdan tashqari son rad etilmaydi — chetga qisqartiriladi.
+ *
+ * Oraliqlar botdagi `sanitizeStudioStyle()` bilan **bir xil**: shunda bot
+ * saqlagan uslub Studio'da aynan o'sha ko'rinishda chiziladi.
+ */
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+/** Kasr sonlar uchun: yumaloqlamasdan chegaraga qisqartiradi. */
+function clampFraction(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Shrift o'lchami, qator oralig'i va chegara — botdagi qiymatlar bilan bir xil. */
+const FONT_SIZE_RANGE = [26, 52] as const;
+const LINE_GAP_RANGE = [30, 120] as const;
+const MARGIN_LEFT_RANGE = [40, 260] as const;
+
+function isPaper(value: unknown): value is PaperType {
+  return PAPER_OPTIONS.some((option) => option.id === value);
+}
+
+function isInk(value: unknown): value is InkColor {
+  return INK_OPTIONS.some((option) => option.id === value);
+}
+
+function isPageFormat(value: unknown): value is PageFormat {
+  return PAGE_FORMAT_OPTIONS.some((option) => option.id === value);
+}
+
+function isPageSide(value: unknown): value is PageSide {
+  return value === "recto" || value === "verso";
+}
+
+/** Shaxsiy uslub o'lchovlari (namunadan hisoblangan) — barchasi sonlar. */
+function sanitizePersonal(raw: unknown): PersonalStyle | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const input = raw as Record<string, unknown>;
+  if (typeof input.baseFont !== "string") return undefined;
+
+  // Oraliqlar `calibrate.ts` namunadan hisoblagan qiymatlardan biroz kengroq —
+  // haqiqiy namuna hech qachon chetga chiqmaydi, buzuq qiymat esa qisqartiriladi.
+  const ranges = {
+    slant: [-30, 30],
+    stretch: [0.6, 1.6],
+    weight: [0.5, 2.2],
+    tracking: [0.6, 1.6],
+    wobble: [0, 1],
+    drift: [0, 10],
+    sizeScale: [0.6, 1.6],
+  } as const;
+  const keys = Object.keys(ranges) as (keyof typeof ranges)[];
+  const numbers: Partial<Record<keyof typeof ranges, number>> = {};
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+    const [min, max] = ranges[key];
+    numbers[key] = clampFraction(value, min, max);
+  }
+  return { baseFont: input.baseFont, ...numbers } as PersonalStyle;
+}
+
+/**
+ * Botdan kelgan uslubni xavfsiz o'qish: faqat ma'lum maydonlar qabul qilinadi,
+ * notanish yoki buzuq qiymatlar tashlanadi. Shu tufayli Studio eskisi bilan
+ * ishlashda davom etadi (bot yangi maydon qo'shsa ham yiqilmaydi).
+ */
+export function sanitizeStyle(raw: unknown): Partial<NotebookStyle> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const input = raw as Record<string, unknown>;
+  const style: Partial<NotebookStyle> = {};
+
+  if (isPaper(input.paper)) style.paper = input.paper;
+  if (isInk(input.ink)) style.ink = input.ink;
+  if (typeof input.font === "string" && fontEntry(input.font)) style.font = input.font;
+  if (typeof input.fontSize === "number" && Number.isFinite(input.fontSize)) {
+    style.fontSize = clampNumber(input.fontSize, ...FONT_SIZE_RANGE);
+  }
+  if (typeof input.lineGap === "number" && Number.isFinite(input.lineGap)) {
+    style.lineGap = clampNumber(input.lineGap, ...LINE_GAP_RANGE);
+  }
+  if (typeof input.marginLeft === "number" && Number.isFinite(input.marginLeft)) {
+    style.marginLeft = clampNumber(input.marginLeft, ...MARGIN_LEFT_RANGE);
+  }
+  if (typeof input.marginLine === "boolean") style.marginLine = input.marginLine;
+  if (typeof input.wobble === "number" && Number.isFinite(input.wobble)) {
+    style.wobble = clampFraction(input.wobble, 0, 1);
+  }
+  if (typeof input.seed === "number" && Number.isFinite(input.seed)) {
+    style.seed = clampNumber(Math.floor(input.seed), 0, 999_999);
+  }
+  if (typeof input.mathMode === "boolean") style.mathMode = input.mathMode;
+  if (isPageFormat(input.pageFormat)) style.pageFormat = input.pageFormat;
+  // `startSide` — betning tomoni: chegara chapda (recto) yoki o'ngda (verso).
+  if (isPageSide(input.startSide)) style.startSide = input.startSide;
+  const personal = sanitizePersonal(input.personal);
+  if (personal) style.personal = personal;
+
+  return style;
 }
 
 /* ------------------------------------------------------------------ */
@@ -272,6 +405,13 @@ export async function sendToChat(payload: MiniAppSendPayload): Promise<MiniAppSe
   if (text.length === 0) {
     return { ok: false, message: "Avval matn yozing — bot uni daftarga ko'chirib beradi." };
   }
+  if (text.length > MINI_APP_TEXT_LIMIT) {
+    // Bot ham xuddi shu chegarada rad etadi — matn jimgina qisqartirilmaydi.
+    return {
+      ok: false,
+      message: `Matn juda uzun: ${text.length} belgi, chegara — ${MINI_APP_TEXT_LIMIT}. Matnni bo'lib yuboring.`,
+    };
+  }
 
   let response: Response;
   try {
@@ -383,7 +523,7 @@ export async function fetchNotebookState(notebookId?: string | null): Promise<Mi
       notebooks: Array.isArray(notebooks) ? notebooks : [],
       activeId: typeof body?.activeId === "string" ? body.activeId : null,
       side: body?.side ?? null,
-      style: body?.style ?? {},
+      style: sanitizeStyle(body?.style),
     },
   };
 }

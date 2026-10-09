@@ -40,7 +40,14 @@ export const HEALTH_PATH = "/healthz";
 export const MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60;
 /** So'rov tanasining eng katta hajmi (rasm yuborilmaydi, faqat matn). */
 const MAX_BODY_BYTES = 256 * 1024;
-/** Bitta so'rovda yuboriladigan eng ko'p belgi (botdagi cheklov bilan bir xil). */
+/**
+ * Bitta so'rovda yuboriladigan eng ko'p belgi.
+ *
+ * Studio'dagi `MINI_APP_TEXT_LIMIT` bilan **bir xil** bo'lishi kerak
+ * (`check:mini-app` ikkala qiymatni solishtiradi). Chegaradan uzun matn jimgina
+ * qisqartirilmaydi — 400 bilan rad etiladi, aks holda foydalanuvchi nima
+ * yuborilganini bilmay qolardi.
+ */
 export const MAX_MINI_APP_CHARS = 4000;
 
 export interface MiniAppUser {
@@ -468,9 +475,24 @@ export function createMiniAppHandler(
       return;
     }
 
-    const text = typeof payload.text === "string" ? payload.text.trim().slice(0, MAX_MINI_APP_CHARS) : "";
+    const text = typeof payload.text === "string" ? payload.text.trim() : "";
     if (text.length === 0) {
       sendJson(response, 400, { ok: false, error: "matn bo'sh" }, cors);
+      return;
+    }
+    if (text.length > MAX_MINI_APP_CHARS) {
+      // Matn qisqartirilmaydi: Studio ham xuddi shu chegarani ko'rsatadi va
+      // foydalanuvchi matnni bo'lib yuborishi mumkin.
+      sendJson(
+        response,
+        400,
+        {
+          ok: false,
+          error: "matn juda uzun",
+          message: `Matn juda uzun: ${text.length} belgi, chegara — ${MAX_MINI_APP_CHARS}. Matnni bo'lib yuboring.`,
+        },
+        cors,
+      );
       return;
     }
 
