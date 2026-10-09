@@ -1,5 +1,5 @@
 /**
- * Daftar Bot — matematik va yunon belgilarining "qalam" kutubxonasi.
+ * Student Daftari — matematik va yunon belgilarining "qalam" kutubxonasi.
  *
  * Har bir belgi em-qutisida yozilgan qalam harakatlaridan iborat:
  *   x: 0 (belgi boshi) → advance (belgi oxiri)

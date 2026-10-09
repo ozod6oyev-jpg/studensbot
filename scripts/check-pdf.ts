@@ -180,7 +180,7 @@ async function main(): Promise<void> {
     "sahifa o'lchami A4 (595.28 x 841.89 pt)",
   );
   assert(/<FEFF004D00610074/.test(text), "o'zbekcha/non-ASCII nom UTF-16 sifatida yozilgan");
-  assert(text.includes("/Producer (Daftar Bot)"), "PDF metadatasida ishlab chiqaruvchi bor");
+  assert(text.includes("/Producer (Student Daftari)"), "PDF metadatasida ishlab chiqaruvchi bor");
 
   // Rasmlar haqiqatan ochilishini tekshiramiz (baytlar JPEG emasligini ushlaydi).
   const decoded = facts.images.map((image) => jpeg.decode(image.jpegBytes, { useTArray: true }));

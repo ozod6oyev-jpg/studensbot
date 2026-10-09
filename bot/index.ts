@@ -1,5 +1,5 @@
 /**
- * Daftar Bot — Telegram bot runtime.
+ * Student Daftari — Telegram bot runtime.
  *
  * Foydalanuvchi matn yuboradi → bot uni daftar varaqasiga qo'lda yozilgan
  * ko'rinishda rasm qilib qaytaradi.
@@ -462,7 +462,7 @@ const CYRILLIC_RE = /[\u0400-\u04FF]/;
  */
 function helpText(): string {
   return [
-    "📓 Daftar Bot — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
+    "📓 Student Daftari — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
     "",
     "Hammasi tugmalarda — buyruq yodlash shart emas:",
     `• ${L.text} — yozishni boshlash (daftar tanlanadi)`,
@@ -1189,7 +1189,7 @@ function defaultBookTitle(list: Notebook[]): string {
 
 function welcomeText(): string {
   return [
-    "👋 Assalomu alaykum! Men Daftar Bot — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
+    "👋 Assalomu alaykum! Men Student Daftari — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
     "",
     `📚 Avval ${L.newBook} bilan daftar yaratasiz (12, 36, 48 yoki 96 varaq va nom),`,
     `✍️ keyin ${L.text} orqali daftarni tanlab matn yuborasiz.`,

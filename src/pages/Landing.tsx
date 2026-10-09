@@ -178,7 +178,7 @@ export default function Landing() {
               className="animate-ink-in mt-6 max-w-xl text-lg leading-relaxed text-pencil/85"
               style={{ animationDelay: "160ms" }}
             >
-              Daftar Bot oddiy matnni oladi va uni haqiqiy daftar varaqasidek — yo'l-yo'l yoki katak —
+              Student Daftari oddiy matnni oladi va uni haqiqiy daftar varaqasidek — yo'l-yo'l yoki katak —
               qo'lyozma bilan yozib, rasm qilib qaytaradi. Adabiyot darslaridagi insholar, diktantlar va
               matematika misollari uchun.
             </p>
@@ -263,7 +263,7 @@ export default function Landing() {
           <Badge>Imkoniyatlar</Badge>
           <h2 className="hand mt-4 text-4xl text-ink sm:text-5xl">Oddiy so'rov, jonli natija</h2>
           <p className="mt-3 text-base leading-relaxed text-pencil/80">
-            Botni yozish texnikasini bilish shart emas: matnni yuborasiz, qolganini Daftar Bot bajaradi.
+            Botni yozish texnikasini bilish shart emas: matnni yuborasiz, qolganini Student Daftari bajaradi.
           </p>
         </header>
 
@@ -383,7 +383,7 @@ export default function Landing() {
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-ink text-paper">
                   <NotebookPen className="h-4 w-4" />
                 </span>
-                <span className="text-sm font-semibold text-ink">Daftar Bot</span>
+                <span className="text-sm font-semibold text-ink">Student Daftari</span>
                 <span className="ml-auto rounded-lg bg-ink/8 px-2 py-1 text-[11px] font-semibold text-ink/70">
                   Studio
                 </span>

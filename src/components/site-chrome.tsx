@@ -41,7 +41,7 @@ export function SiteHeader({
             <NotebookPen className="h-5 w-5" />
           </span>
           <span className="leading-tight">
-            <span className="hand block text-xl text-ink">Daftar Bot</span>
+            <span className="hand block text-xl text-ink">Student Daftari</span>
             <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-pencil/60">
               qo'lyozma generatör
             </span>
@@ -87,7 +87,7 @@ export function SiteFooter({ showBotSetup = true }: { showBotSetup?: boolean } =
     <footer className="mt-20 border-t border-paper-edge/80 bg-paper-deep/60">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-8 text-sm text-pencil/70 sm:flex-row sm:items-center sm:justify-between">
         <p>
-          <span className="hand text-lg text-ink">Daftar Bot</span> — matnni daftarga qo'lda yozilgan
+          <span className="hand text-lg text-ink">Student Daftari</span> — matnni daftarga qo'lda yozilgan
           ko'rinishda saqlaydi.
         </p>
         <div className="flex flex-wrap items-center gap-4">

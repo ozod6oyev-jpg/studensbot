@@ -167,7 +167,7 @@ export function buildPdf(pages: PdfImagePage[], options: PdfOptions = {}): Uint8
 
   begin(
     infoId,
-    `<< /Title ${pdfString(title)} /Producer ${pdfString("Daftar Bot")} /Creator ${pdfString("Daftar Bot")} >>`,
+    `<< /Title ${pdfString(title)} /Producer ${pdfString("Student Daftari")} /Creator ${pdfString("Student Daftari")} >>`,
   );
 
   const xrefStart = writer.offset;

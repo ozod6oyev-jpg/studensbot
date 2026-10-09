@@ -277,7 +277,7 @@ export default function BotSetup() {
               <CardTitle className="text-base">Nega bu sahifada akkaunt yo'q?</CardTitle>
             </CardHeader>
             <CardContent className="text-sm leading-relaxed text-pencil/85">
-              Daftar Bot butunlay brauzerda va sizning kompyuteringizda ishlaydi: Studio hech qanday
+              Student Daftari butunlay brauzerda va sizning kompyuteringizda ishlaydi: Studio hech qanday
               serverga matn yubormaydi, bot esa siz ishga tushiradigan jarayon. Shu sababli ro'yxatdan
               o'tish, parol yoki profil kerak emas — hech qanday ma'lumot bizga saqlanmaydi.
             </CardContent>

@@ -1,5 +1,5 @@
 /**
- * Daftar Bot — qo'lyozma render dvigateli uchun umumiy tiplar.
+ * Student Daftari — qo'lyozma render dvigateli uchun umumiy tiplar.
  * Bu fayl dvigatelning "shartnomasi": brauzer (Studio) va Node (Telegram bot)
  * bir xil API'dan foydalanadi.
  */
