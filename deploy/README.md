@@ -5,8 +5,11 @@ serveringizda (Ubuntu/Debian, systemd) ishga tushirish uchun.
 
 | Fayl | Vazifasi |
 | --- | --- |
-| `deploy.sh` | Serverni tayyorlaydi: Bun, kerakli paketlar, `daftar` foydalanuvchisi, loyiha fayllari, systemd xizmati |
+| `deploy.sh` | Serverni tayyorlaydi va to'liq yangilashni bajaradi: Bun, kerakli paketlar, `daftar` foydalanuvchisi, loyiha fayllari, sayt (`dist/`), systemd xizmati, avtomatik yangilash taymeri |
 | `daftar-bot.service` | systemd unit fayli (`deploy.sh` uni `/etc/systemd/system/` ga nusxalaydi) |
+| `autodeploy.sh` | Git'dagi yangi commit'ni sezib, to'liq yangilashni bajaradigan skript (uni taymer chaqiradi) |
+| `daftar-autodeploy.service` | O'sha skriptni ishga tushiradigan systemd birligi (`deploy.sh` o'rnatadi) |
+| `daftar-autodeploy.timer` | Uni har 2 daqiqada ishga tushiradigan taymer |
 | `README.md` | Shu qo'llanma |
 
 Kerak bo'ladi: Ubuntu 22.04+ (yoki Debian 12+), root (yoki `sudo`) huquqi va
@@ -42,10 +45,13 @@ rsync -av --exclude node_modules --exclude .env ./ sizning_foydalanuvchi@SERVER_
 > saqlanadi (4-bosqichga qarang).
 
 > ℹ️ Bu papka — **manba**, ya'ni kod nusxasi. `deploy.sh` esa loyihani
-> `/opt/daftar-bot` ga **o'rnatadi**, va u yerda `.git` bo'lmaydi (nusxa
-> `rsync` bilan ko'chiriladi). Shuning uchun serverdagi
+> `/opt/daftar-bot` ga **o'rnatadi**, va `rsync` bilan o'rnatilgan nusxada `.git`
+> bo'lmaydi. Shuning uchun serverdagi
 > `/opt/daftar-bot` ichida `git pull` yozish xato beradi — kodni doim shu
 > manba papkada yangilang (quyidagi "Yangilash" bo'limi).
+>
+> ℹ️ **Avtomatik yangilash** uchun `/opt/daftar-bot` da `.git` bo'lishi kerak, ya'ni kod
+> `git clone` bilan o'rnatilgan bo'lsin (quyidagi "Avtomatik yangilash" bo'limi).
 
 ## 3. O'rnatish
 
@@ -68,10 +74,16 @@ Skript nima qiladi:
 3. `daftar` nomli tizim foydalanuvchisini va `/var/lib/daftar-bot` papkasini yaratadi;
 4. loyihani `/opt/daftar-bot` ga joylaydi (qayta ishga tushirilsa — `git pull` qiladi);
 5. `bun install` bajaradi;
-6. `.env` fayli bo'lmasa namuna yaratadi (`chmod 600`); mavjudini **hech qachon** o'zgartirmaydi;
-7. systemd xizmatini o'rnatadi, yoqadi va ishga tushiradi.
+6. saytni yig'adi (`bun run build` → `dist/`), shunda nginx yangi sahifani ko'rsatadi;
+7. `.env` fayli bo'lmasa namuna yaratadi (`chmod 600`); mavjudini **hech qachon** o'zgartirmaydi;
+8. systemd xizmatini o'rnatadi, yoqadi va ishga tushiradi;
+9. nginx faol bo'lsa uni qayta o'qitadi;
+10. **avtomatik yangilash taymerini** o'rnatadi va yoqadi (quyidagi "Avtomatik yangilash" bo'limi).
 
-Skriptni bir necha marta ishga tushirish xavfsiz.
+Skriptni bir necha marta ishga tushirish xavfsiz: har bir ishga tushirish to'liq yangilashni
+bajaradi — `git pull` → `bun install` → saytni yig'ish → xizmatni qayta ishga tushirish →
+`nginx`. Taymer kerak bo'lmasa, `sudo bash deploy/deploy.sh --no-autodeploy` bilan uni
+umuman o'rnatmasa ham bo'ladi.
 
 ## 4. Tokenni kiritish
 
@@ -170,6 +182,10 @@ sudo systemctl disable daftar-bot    # avtomatik ishga tushishni o'chirish
 
 ## Yangilash (yangi versiya)
 
+> Oddiy holatda bu bo'lim kerak emas: serverda **avtomatik yangilash** o'rnatilgan va u yangi
+> commit'ni o'zi oladi (keyingi bo'lim). Qo'lda yangilash birinchi marta o'rnatishda, taymer
+> o'chirilgan bo'lsa yoki jurnalda xato ko'ringanda ishlatiladi.
+
 Kodni **manba papkada** yangilab, keyin o'rnatish skriptini ishga tushiring:
 
 ```bash
@@ -219,6 +235,52 @@ bilan almashtirilganda ham token saqlab qolinadi.
 > Skript bunday paytda o'sha fayllarni `/var/lib/daftar-bot/deploy-backup-<sana>/`
 > ga saqlab qo'yadi (`changes.patch` va `untracked/`) va yangilanishni baribir
 > o'rnatadi — hech narsa jimgina yo'qolmaydi.
+
+## Avtomatik yangilash (git → deploy → build → restart)
+
+**Serverda qo'lda hech narsa ishga tushirish shart emas.** `deploy.sh` bilan birga
+`daftar-autodeploy.timer` o'rnatiladi: u har **2 daqiqada** `origin` da yangi commit bor-yo'qligini
+tekshiradi va bor bo'lsa **to'liq yangilashni** o'zi bajaradi:
+
+```text
+git pull  →  bun install  →  bun run build (dist/)  →  systemctl restart daftar-bot  →  nginx reload
+```
+
+Ya'ni repozitoriyga push qilingan har bir o'zgarish ~2 daqiqa ichida serverga o'rnatiladi.
+O'zgarish bo'lmasa skript hech narsa qilmaydi — na build, na restart.
+
+> **Bir marta bajariladigan qadam (eski serverlar uchun):** taymer paydo bo'lishi uchun
+> o'zgarishni **bir marta qo'lda** olish kerak:
+>
+> ```bash
+> cd ~/daftar-bot && git pull && sudo bash deploy/deploy.sh
+> ```
+>
+> Shundan keyin bu buyruq kerak emas — keyingi yangilanishlar o'zi o'rnatiladi.
+
+| Buyruq | Nima qiladi |
+| --- | --- |
+| `systemctl list-timers daftar-autodeploy.timer` | taymer qachon ishga tushishini ko'rsatadi |
+| `journalctl -u daftar-autodeploy -n 50` | yangilashlar jurnali (nima o'rnatildi, xato bo'ldimi) |
+| `sudo bash /opt/daftar-bot/deploy/autodeploy.sh --check` | hozir yangilanish bor-yo'qligini aytadi (hech narsa o'rnatmaydi) |
+| `sudo bash /opt/daftar-bot/deploy/autodeploy.sh` | bo'lsa hoziroq o'rnatadi (taymerni kutmasdan) |
+| `sudo systemctl start daftar-autodeploy` | xuddi shu narsa: yangilashni darhol boshlaydi |
+| `sudo systemctl disable --now daftar-autodeploy.timer` | avtomatik yangilashni o'chiradi |
+
+Skriptning ehtiyot choralari:
+
+- **bir vaqtda ikki nusxa ishlamaydi** (`flock`) — taymer va qo'lda urinish to'qnashmaydi;
+- `git fetch` yiqilsa (internet yoki token) faqat ogohlantirish yoziladi va skript 0 bilan
+  chiqadi: keyingi tekshiruvda yana urinib ko'riladi;
+- serverdagi nusxa upstream'dan **oldinda** bo'lsa (kimdir serverda commit qilgan) hech narsa
+  qilinmaydi — sabab jurnalga yoziladi;
+- deploy haqiqatan yiqilsa skript xato kodi bilan tugaydi: `systemctl --failed` da ko'rinadi,
+  batafsil sabab `journalctl -u daftar-autodeploy -n 80` da;
+- `.env` (token) va `/var/lib/daftar-bot` (sozlamalar, daftarlar) hech qachon o'chirilmaydi;
+- `/opt/daftar-bot` da `.git` bo'lmasa (nusxa `rsync` bilan ko'chirilgan bo'lsa) taymer ishga
+  tushmaydi (`ConditionPathIsDirectory`) — bunday holda kod `git clone` bilan o'rnatilishi kerak;
+- tekshirish oralig'ini o'zgartirish: `daftar-autodeploy.timer` dagi `OnUnitActiveSec` (standart
+  `2min`), so'ng `sudo systemctl daemon-reload && sudo systemctl restart daftar-autodeploy.timer`.
 
 ## Webhook rejimiga o'tish (ixtiyoriy)
 
@@ -319,7 +381,9 @@ sudo nginx -t && sudo systemctl enable --now nginx && sudo systemctl reload ngin
 Endi sahifa `http://SERVER_IP/` da ochiladi. Domen va HTTPS (certbot) uchun `server_name`
 qatorini domeningizga o'zgartiring.
 
-> Yangi versiyadan keyin `dist/` ni qayta yig'ishni unutmang: `sudo -u daftar /usr/local/bin/bun run build`.
+> Yangi versiyadan keyin `dist/` ni qo'lda qayta yig'ish shart emas: `deploy.sh` hamda avtomatik
+yangilash taymeri uni har yangilashda o'zi qayta yig'adi. Qo'lda kerak bo'lsa:
+`cd /opt/daftar-bot && sudo -u daftar /usr/local/bin/bun run build`.
 
 ## Telegram Mini App (Studio'ni chat ichida ochish)
 
@@ -414,10 +478,20 @@ sudo systemctl restart daftar-bot
 
 Shundan keyin bot:
 
-- `PORT` (standart `8080`) portida Mini App serverini ochadi — `POST /mini-app/send`
-  so'rovlarini qabul qiladi (`GET /healthz` → `ok`);
+- `PORT` (standart `8080`) portida Mini App serverini ochadi — `POST /mini-app/send`,
+  `POST /mini-app/state` va `POST /mini-app/notebook` so'rovlarini qabul qiladi
+  (`GET /healthz` → `ok`);
 - Telegram'ning menyu tugmasini Studio'ga bog'laydi va pastdagi menyuga
   `🖥 Studio (Mini App)` tugmasini qo'shadi.
+
+Mini App ichida matn yozishdan oldin **qaysi daftarga** yozilishini tanlaysiz, **qaysi qatordan**
+boshlanishini esa daftar varaqasining o'zida (qatorni bosib) belgilaysiz: `POST /mini-app/state`
+daftarlar ro'yxatini va tanlangan daftarning joriy beti (nechta qator band, qayerdan davom etadi)
+holatini qaytaradi, `POST /mini-app/send` esa `notebookId` va `startLine` ni qabul qiladi.
+Daftarni boshqarish (yangi daftar yaratish, nomlash, o'chirish, oxirgi yozuvni orqaga
+qaytarish, PDF kitob) `POST /mini-app/notebook` orqali bajariladi — u ham `initData` imzosi
+bilan tekshiriladi. Nginx sozlamasi o'zgarmaydi — uchala yo'l ham o'sha `/mini-app/`
+proxy'sidan o'tadi.
 
 Tekshirish:
 
@@ -443,13 +517,57 @@ Mini App uchun domen shart emas, faqat **HTTPS** shart. Ikki ishlaydigan yo'l bo
 
 **a) `sslip.io` / `nip.io` + certbot (bepul va doimiy).** Bu xizmatlar `<IP>.sslip.io`
 ko'rinishidagi nomni o'sha IP manzilga yo'naltiradi, shuning uchun Let's Encrypt sertifikatini
-haqiqiy nom uchun olish mumkin. Serveringiz IP'si `95.123.45.67` bo'lsa:
+haqiqiy nom uchun olish mumkin. Serveringiz IP'si `95.123.45.67` bo'lsa,
+`/etc/nginx/sites-available/daftar` fayli to'liq shunday bo'ladi (yagona farq —
+`server_name` qatorida o'z IP'ingiz):
+
+```nginx
+# /etc/nginx/sites-available/daftar
+server {
+    listen 80;
+    listen [::]:80;
+    server_name 95.123.45.67.sslip.io;
+
+    root /opt/daftar-bot/dist;
+    index index.html;
+
+    # Sayt va Studio sahifasi (Mini App ham shu yerdan ochiladi)
+    location / { try_files $uri $uri/ /index.html; }
+
+    # Mini App: natijani chatga qaytaradigan bot endpointi (bot `PORT`, standart 8080)
+    location /mini-app/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # Faqat webhook rejimida kerak bo'ladi
+    location /telegram/webhook {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location ~* \.(ttf|woff2?|js|css|png|svg)$ {
+        expires 30d;
+        access_log off;
+    }
+}
+```
+
+Yoqish va sertifikat olish:
 
 ```bash
-sudo nano /etc/nginx/sites-available/daftar   # server_name 95.123.45.67.sslip.io;
+sudo ln -sf /etc/nginx/sites-available/daftar /etc/nginx/sites-enabled/daftar
+sudo rm -f /etc/nginx/sites-enabled/default     # 80-portda ikkita default_server bo'lmasin
 sudo nginx -t && sudo systemctl reload nginx
-sudo certbot --nginx -d 95.123.45.67.sslip.io # bepul HTTPS sertifikati
+sudo certbot --nginx -d 95.123.45.67.sslip.io   # bepul HTTPS sertifikati; 443 bloki o'zi qo'shiladi
 ```
+
+> `dist/` papkasi bo'lmasa sayt ochilmaydi: `cd /opt/daftar-bot && sudo -u daftar
+> /usr/local/bin/bun run build`. Studio'ning standart endpointi nisbiy yo'l
+> (`/mini-app/send`; holat va daftar amallari ham shu yo'l ostida) — shu nginx bloki bilan
+> hech narsa qo'shimcha sozlash kerak emas.
 
 So'ng `.env` faylida manzilni yangilang va xizmatni qayta ishga tushiring:
 
@@ -461,9 +579,13 @@ MINI_APP_URL=https://95.123.45.67.sslip.io/studio
 sudo systemctl restart daftar-bot
 ```
 
-80 va 443 portlari ochiq, IP esa doimiy (statik) bo'lishi kerak. IP o'zgarsa manzil ham
+80 va 443 portlari ochiq, IP esa doimiy (statik) bo'lishi kerak (qanday tekshirish va
+xavfsiz ochish — "Portlar va xavfsizlik devori" bo'limi). IP o'zgarsa manzil ham
 o'zgaradi — yangisini `MINI_APP_URL` ga yozib, xizmatni qayta ishga tushirish kifoya
 (@BotFather'da hech narsa o'zgartirilmaydi).
+
+> Agar `sslip.io` o'rniga `nip.io` ishlatsangiz, nom `95.123.45.67.nip.io` ko'rinishida
+> bo'ladi — `server_name` va `certbot -d` da ham o'sha nom yoziladi.
 
 **b) Cloudflare Tunnel (tez, vaqtinchalik manzil).** Serverda `cloudflared` ni o'rnatib, saytni
 ochiq nginx orqali tunnelga ulasak, `https://<tasodifiy>.trycloudflare.com` manzili hosil
@@ -508,6 +630,8 @@ Bunday holatda botning CORS tekshiruvi `MINI_APP_URL` domeniga ruxsat beradi —
 | `Manba va maqsad papka bir xil (/opt/daftar-bot)` | Skript `/opt/daftar-bot` ichidan **manzilsiz** ishga tushirilgan — repozitoriy manzilini qo'shib qayta ishga tushiring: `sudo bash /opt/daftar-bot/deploy/deploy.sh https://github.com/ozod6oyev-jpg/studensbot.git` |
 | `git pull` to'xtaydi: `Your local changes would be overwritten` yoki `untracked working tree files would be overwritten` | O'rnatilgan nusxada saqlanmagan o'zgarish bor (masalan `bun install` `bun.lock` ni yangilagan) yoki kelayotgan versiya papkada allaqachon mavjud kuzatilmaydigan fayl qo'shmoqchi. `deploy.sh` hech narsani jimgina o'chirmaydi: `/var/lib/daftar-bot/deploy-backup-<sana>/` ichiga `changes.patch` (kuzatilgan fayllardagi o'zgarishlar) va `untracked/` (to'sqinlik qilgan fayllar) saqlanadi, so'ng yangilanish davom etadi. Patch'ni qaytarish: `sudo -u daftar git -C /opt/daftar-bot apply /var/lib/daftar-bot/deploy-backup-<sana>/changes.patch` |
 | `fatal: not a git repository` (`/opt/daftar-bot` ichida `git pull`) | Bu o'rnatilgan nusxa, manba emas — kodni manba papkada yangilang (`cd ~/daftar-bot && git pull`), keyin `sudo bash deploy/deploy.sh` |
+| Yangilanish o'zi kelmayapti (push qildim, serverda o'zgarish yo'q) | `systemctl list-timers daftar-autodeploy.timer` (taymer yoqilganmi), `journalctl -u daftar-autodeploy -n 50`, `sudo bash /opt/daftar-bot/deploy/autodeploy.sh --check`. Ko'p uchraydigan sabablar: papkada `.git` yo'q (nusxa `rsync` bilan o'rnatilgan), `git fetch` uchun token/ruxsat yo'q yoki serverdagi nusxa upstream'dan oldinda |
+| Push qildim, sayt yangilanmadi | Taymerni kuting (~2 daqiqa) yoki `sudo bash /opt/daftar-bot/deploy/autodeploy.sh`. Sayt `dist/` dan o'qiladi va u har yangilashda qayta yig'iladi; brauzer eski sahifani ko'rsatsa — qattiq yangilang (`Ctrl+Shift+R`) |
 | `can't cd to /opt/daftar-bot` | `chown -R daftar:daftar /opt/daftar-bot` |
 | Sozlamalar yoki daftarlar saqlanmayapti | `/var/lib/daftar-bot` papkasi `daftar` foydalanuvchisiga tegishli bo'lishi kerak (`settings.json`, `notebooks.json`, `styles.json`) |
 | Rasm chiqmayapti | Matn yuborilganini va ochiq daftar borligini tekshiring: matn faqat tanlangan daftarga yoziladi, daftar bo'lmasa bot yangisini yaratishni aytadi |
@@ -515,6 +639,70 @@ Bunday holatda botning CORS tekshiruvi `MINI_APP_URL` domeniga ruxsat beradi —
 | Mini App tugmasi bosilsa sahifa ochilmayapti ("URL'ni ochib bo'lmadi") | Domen HTTPS emas, `MINI_APP_URL` xato yozilgan yoki nginx'da `/mini-app/` (va sayt `dist/`) proxy qilinmagan. HTTPS sertifikatini tekshiring: `sudo certbot certificates`, so'ng `nginx -t && sudo systemctl reload nginx` |
 | Mini App'da "Telegram ma'lumotlari eskirgan" chiqadi | `initData` 24 soatdan eski — Mini App'ni yopib, bot menyusidagi tugma orqali qaytadan oching |
 | Mini App'da "Bot serveriga ulanib bo'lmadi" yoki "Yuborilmadi (HTTP 500)" | Bot jarayoni ishlamayapti yoki `PORT`da tinglamayapti: `systemctl status daftar-bot`, `journalctl -u daftar-bot -n 50`, `curl -s http://127.0.0.1:8080/healthz` |
+| Serverning o'zida `curl http://127.0.0.1/` ishlaydi, tashqaridan (telefon yoki boshqa kompyuterdan) esa ochilmayapti | Port yopiq: mahalliy firewall (`ufw`) yoki provayder firewall'i 80/443 ga ruxsat bermayapti — quyidagi "Portlar va xavfsizlik devori" bo'limi. Sertifikat olishdan oldin 80 ochiq bo'lishi shart |
+| `certbot` "Connection refused" / "Timeout during connect" deb yiqiladi | Let's Encrypt serveringizning 80-portiga kira olmayapti: firewall/provayder qoidasi yoki noto'g'ri `server_name`. `sudo nginx -t`, `sudo ufw status verbose` va provayder panelidagi Inbound qoidalarini tekshiring |
+
+## Portlar va xavfsizlik devori
+
+Mini App uchun tashqaridan faqat **80** (HTTP va sertifikat olish) va **443** (HTTPS) kerak.
+Botning `8080` porti tashqariga ochilmaydi — unga faqat nginx `127.0.0.1` orqali murojaat
+qiladi.
+
+**1. Portda haqiqatan tinglanayaptimi (serverning o'zida):**
+
+```bash
+sudo ss -tlnp | grep -E ':(80|443)\b'   # nginx ko'rinishi kerak
+systemctl is-active nginx               # active
+curl -sI http://127.0.0.1/ | head -1    # 200/301
+```
+
+**2. Mahalliy firewall ruxsat berayaptimi:**
+
+```bash
+sudo ufw status verbose                 # 80/tcp va 443/tcp ALLOW bo'lsin
+sudo iptables -S | grep -E 'dpt:(80|443)'      # ufw ishlatilmasa
+sudo nft list ruleset | grep -E 'dport (80|443)'   # nftables ishlatilsa
+```
+
+**3. Tashqaridan haqiqatan ochiqmi:** buni serverning o'zidan aniqlab bo'lmaydi
+(ichkaridan kirish har doim ishlaydi). Telefonni Wi-Fi'dan uzib (mobil internet) yoki
+boshqa kompyuterdan sinab ko'ring:
+
+```bash
+nc -vz <SERVER_IP> 80 && nc -vz <SERVER_IP> 443
+curl -sI http://<SERVER_IP>.sslip.io/ | head -1
+```
+
+**4. Yopiq bo'lsa — xavfsiz ochish (Debian/Ubuntu, `ufw`):**
+
+```bash
+sudo apt-get install -y ufw
+sudo ufw allow OpenSSH        # AVVAL SSH — aks holda ulanishni o'zingiz uzib qo'yasiz
+sudo ufw allow 'Nginx Full'   # 80 + 443 birga
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw enable               # "Command may disrupt existing ssh connections" — y
+sudo ufw status verbose
+```
+
+SSH boshqa portda bo'lsa (`sshd_config` dagi `Port`), `OpenSSH` o'rniga o'sha portni
+yozing: `sudo ufw allow 2222/tcp`.
+
+**5. Xavfsizlik qoidalari:**
+
+- 80/443 dan boshqasini ochish **shart emas**; `ufw enable` qilgandan keyin kerak
+  bo'lmagan portlar avtomatik yopiq qoladi;
+- **8080** ni tashqariga ochmang. Bot texnik jihatdan `0.0.0.0:8080` da tinglaydi
+  (`ss -tlnp | grep 8080`), lekin unga faqat nginx murojaat qilishi kerak. Ishonch
+  bo'lmasa: `sudo ufw deny 8080/tcp`;
+- ijtimoiy tarmoq/VPS provayderining **panelidagi firewall** (Hetzner Cloud Firewall,
+  DigitalOcean Cloud Firewall, AWS Security Group, Oracle VCN) mahalliy `ufw` dan
+  ustun turadi — u yerda ham `Inbound: 22 (faqat o'z IP'ingiz), 80, 443 tcp` ruxsat
+  berilgan bo'lishi shart. Ko'p hollarda "port yopiq" muammosining sababi shu;
+- `certbot` olgandan keyin 80 ni yopmang: u sertifikatni yangilashda (HTTP-01)
+  qayta kerak bo'ladi;
+- ishlab bo'lgach tekshiring: `sudo ufw status verbose`, `sudo certbot certificates`,
+  `curl -sI https://<SERVER_IP>.sslip.io/studio | head -1`.
 
 ## Xavfsizlik
 

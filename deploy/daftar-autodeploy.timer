@@ -1,0 +1,20 @@
+[Unit]
+# Daftar Bot — yangilanish bor-yo'qligini muntazam tekshiradi va bor bo'lsa
+# `daftar-autodeploy.service` ni ishga tushiradi (u to'liq deploy qiladi).
+#
+# Tekshirish oralig'i: pastdagi OnUnitActiveSec qiymati (standart 2 daqiqa).
+# O'zgartirgach: sudo systemctl daemon-reload && sudo systemctl restart daftar-autodeploy.timer
+#
+# Holat : systemctl list-timers daftar-autodeploy.timer
+# Loglar: journalctl -u daftar-autodeploy -n 50
+Description=Daftar Bot — yangilanishni muntazam tekshirish (git → deploy → build → restart)
+Documentation=file:/opt/daftar-bot/deploy/README.md
+
+[Timer]
+Unit=daftar-autodeploy.service
+# Server yongandan 2 daqiqa o'tib birinchi tekshiruv, keyin har 2 daqiqada.
+OnBootSec=2min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

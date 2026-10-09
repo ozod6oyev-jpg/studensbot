@@ -23,7 +23,12 @@
  *      `.env` ni saqlab qoladi;
  *   6. kelayotgan versiya papkada allaqachon mavjud kuzatilmaydigan fayl
  *      qo'shmoqchi bo'lsa ham shu ish qilinadi: eski fayl jimgina o'chirilmaydi,
- *      zaxira papkasiga ko'chiriladi.
+ *      zaxira papkasiga ko'chiriladi;
+ *   7. har bir to'liq deploy saytni qayta yig'adi (`dist/`), nginx ni qayta
+ *      o'qitadi va avtomatik yangilash taymerini o'rnatib yoqadi;
+ *   8. `autodeploy.sh` o'zgarish bo'lmasa hech narsa qilmaydi, yangi commit
+ *      bo'lsa to'liq deploy'ni o'zi bajaradi (`.env` ham saqlanadi),
+ *      `--check` esa faqat aytib qo'yadi, `git fetch` yiqilsa tinch turadi.
  *
  * Skript root huquqini talab qiladi (deploy.sh ning o'zi ham): root bo'lmasa
  * tekshiruv bajarilmaydi va buni ochiq aytib, xato bilan tugaydi.
@@ -37,6 +42,9 @@ import { fileURLToPath } from "node:url";
 const REPO_DIR = fileURLToPath(new URL("..", import.meta.url));
 const REAL_SCRIPT = join(REPO_DIR, "deploy/deploy.sh");
 const REAL_UNIT = join(REPO_DIR, "deploy/daftar-bot.service");
+const REAL_AUTODEPLOY = join(REPO_DIR, "deploy/autodeploy.sh");
+const REAL_AUTODEPLOY_SERVICE = join(REPO_DIR, "deploy/daftar-autodeploy.service");
+const REAL_AUTODEPLOY_TIMER = join(REPO_DIR, "deploy/daftar-autodeploy.timer");
 
 const WORK = "/tmp/daftar-deploy-check";
 const APP = `${WORK}/app`;
@@ -88,11 +96,16 @@ interface RunResult {
 }
 
 /** Sinov skriptini stub muhitida ishga tushiradi. */
-function run(scriptPath: string, args: string[] = [], cwd = WORK): RunResult {
+function run(
+  scriptPath: string,
+  args: string[] = [],
+  cwd = WORK,
+  extraEnv: Record<string, string> = {},
+): RunResult {
   const result = spawnSync("bash", [scriptPath, ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, PATH: `${BIN}:${process.env.PATH ?? ""}`, HOME: `${WORK}/home` },
+    env: { ...process.env, PATH: `${BIN}:${process.env.PATH ?? ""}`, HOME: `${WORK}/home`, ...extraEnv },
   });
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   console.log(
@@ -143,36 +156,62 @@ async function main(): Promise<void> {
     'while [ $# -gt 0 ]; do\n  case "$1" in\n    -u) shift 2 ;;\n    --) shift; break ;;\n    *) break ;;\n  esac\ndone\nexec "$@"',
   );
 
-  // ---- haqiqiy deploy.sh ni yo'llari almashtirilgan holda nusxalash --------
+  // ---- haqiqiy skriptlarni yo'llari almashtirilgan holda nusxalash --------
+  // Serverdagi yo'llar (/opt, /var/lib, /etc/systemd/system, /usr/local/bin)
+  // shu sandbox ichidagi yo'llarga almashtiriladi — skript hech qachon tashqariga
+  // yozmaydi.
+  const adapt = (text: string): string =>
+    text
+      .split("/opt/daftar-bot")
+      .join(APP)
+      .split("/var/lib/daftar-bot")
+      .join(DATA)
+      .split("/etc/systemd/system")
+      .join(UNITS)
+      .split("/usr/local/bin/bun")
+      .join(`${BIN}/bun`)
+      .split("${HOME}/.bun/bin/bun")
+      .join(`${BIN}/bun`)
+      .split("daftar:daftar")
+      .join(`${OWNER}:${OWNER}`)
+      .split("-u daftar")
+      .join(`-u ${OWNER}`);
+
   const original = await readFile(REAL_SCRIPT, "utf8");
-  const adapted = original
-    .split("/opt/daftar-bot")
-    .join(APP)
-    .split("/var/lib/daftar-bot")
-    .join(DATA)
-    .split("/etc/systemd/system")
-    .join(UNITS)
-    .split("/usr/local/bin/bun")
-    .join(`${BIN}/bun`)
-    .split("${HOME}/.bun/bin/bun")
-    .join(`${BIN}/bun`)
-    .split("daftar:daftar")
-    .join(`${OWNER}:${OWNER}`)
-    .split("-u daftar")
-    .join(`-u ${OWNER}`);
+  const adapted = adapt(original);
   if (adapted === original) fail("deploy.sh da kutilgan yo'llar topilmadi — testni moslashtirish kerak.");
   const scriptPath = `${SCRIPT_DIR}/deploy.sh`;
   await writeFile(scriptPath, adapted, "utf8");
   await copyFile(REAL_UNIT, `${SCRIPT_DIR}/daftar-bot.service`);
+  await copyFile(REAL_AUTODEPLOY_SERVICE, `${SCRIPT_DIR}/daftar-autodeploy.service`);
+  await copyFile(REAL_AUTODEPLOY_TIMER, `${SCRIPT_DIR}/daftar-autodeploy.timer`);
+
+  // Avtomatik yangilash skripti ham xuddi shunday moslashtiriladi. Muhim:
+  // repozitoriyga ham MOSLASHTIRILGAN nusxa yoziladi — serverda deploy'ni
+  // takroran chaqiradigan skript sandbox ichida qolishi shart.
+  const autodeployOriginal = await readFile(REAL_AUTODEPLOY, "utf8");
+  const autodeploy = adapt(autodeployOriginal);
+  if (autodeploy === autodeployOriginal) fail("autodeploy.sh da kutilgan yo'llar topilmadi — testni moslashtirish kerak.");
+  const autodeployPath = `${SCRIPT_DIR}/autodeploy.sh`;
+  await writeFile(autodeployPath, autodeploy, "utf8");
 
   // ---- lokal repozitoriy (git manbasi) ------------------------------------
   await mkdir(join(REMOTE, "bot"), { recursive: true });
   await mkdir(join(REMOTE, "deploy"), { recursive: true });
   await writeFile(join(REMOTE, "bot/index.ts"), "// 1-versiya\nconsole.log(\"v1\");\n", "utf8");
-  await writeFile(join(REMOTE, "package.json"), '{\n  "name": "daftar-bot-check"\n}\n', "utf8");
+  await writeFile(
+    join(REMOTE, "package.json"),
+    '{\n  "name": "daftar-bot-check",\n  "scripts": {\n    "build": "vite build"\n  }\n}\n',
+    "utf8",
+  );
   await writeFile(join(REMOTE, "Readme.md"), "# Sinov repozitoriyasi\n", "utf8");
-  await copyFile(REAL_SCRIPT, join(REMOTE, "deploy/deploy.sh"));
+  // Repozitoriyga sandbox uchun moslashtirilgan skriptlar yoziladi (ya'ni
+  // sandbox ichida klonlanadigan nusxa ham xavfsiz qoladi).
+  await writeFile(join(REMOTE, "deploy/deploy.sh"), adapted, "utf8");
+  await writeFile(join(REMOTE, "deploy/autodeploy.sh"), autodeploy, "utf8");
   await copyFile(REAL_UNIT, join(REMOTE, "deploy/daftar-bot.service"));
+  await copyFile(REAL_AUTODEPLOY_SERVICE, join(REMOTE, "deploy/daftar-autodeploy.service"));
+  await copyFile(REAL_AUTODEPLOY_TIMER, join(REMOTE, "deploy/daftar-autodeploy.timer"));
   git(["init", "-q", "-b", "main", "."], REMOTE);
   git(["add", "-A"], REMOTE);
   git(["commit", "-q", "-m", "v1"], REMOTE);
@@ -186,6 +225,16 @@ async function main(): Promise<void> {
   assert(existsSync(DATA), `ma'lumot papkasi yaratildi (${DATA.replace(WORK, "WORK")})`);
   assert(existsSync(`${UNITS}/daftar-bot.service`), "systemd unit fayli o'rnatildi");
   assert(systemctlCalls().includes("restart daftar-bot"), "xizmat qayta ishga tushirildi");
+  assert(first.output.includes("Sayt yig'ilmoqda"), "deploy saytni ham yig'adi (dist)");
+  assert(systemctlCalls().includes("reload nginx"), "nginx qayta o'qitildi");
+  assert(
+    existsSync(`${UNITS}/daftar-autodeploy.timer`),
+    "avtomatik yangilash taymeri o'rnatildi",
+  );
+  assert(
+    systemctlCalls().includes("enable --now daftar-autodeploy.timer"),
+    "taymer o'rnatildi va yoqildi",
+  );
 
   console.log("\n=== 2-holat: rsync bilan o'rnatilgan nusxa + mavjud token ===");
   const token = "111222:CHECK-TOKEN-KEEP-ME";
@@ -279,11 +328,79 @@ async function main(): Promise<void> {
   assert(lastBackup !== "" && existsSync(join(lastBackup, "changes.patch")), "kuzatilgan o'zgarishlar patchi ham saqlandi");
   assert(tokenInEnv() === token, "bu holatda ham token saqlandi");
 
+  // ---- avtomatik yangilash (autodeploy.sh + taymer) ----------------------
+  // Taymer har 2 daqiqada shu skriptni chaqiradi: u yangi commit bo'lsa to'liq
+  // deploy'ni o'zi bajarishi, bo'lmasa esa hech narsaga tegmasligi kerak.
+  const autoEnv = { AUTODEPLOY_LOCK: `${WORK}/autodeploy.lock` };
+  const restartsNow = () => (systemctlCalls().match(/restart daftar-bot/g) ?? []).length;
+
+  console.log("\n=== 8-holat: autodeploy — o'zgarish bo'lmasa hech narsa qilmaydi ===");
+  const restartsBefore = restartsNow();
+  const quiet = run(autodeployPath, ["--verbose"], WORK, autoEnv);
+  assert(quiet.status === 0, `tekshiruv xatosiz tugadi (kod ${quiet.status})`);
+  assert(quiet.output.includes("o'zgarish yo'q"), "o'zgarish yo'qligi aytildi");
+  assert(
+    restartsNow() === restartsBefore,
+    "o'zgarish bo'lmasa bot qayta ishga tushirilmadi (build ham qilinmadi)",
+  );
+
+  console.log("\n=== 9-holat: autodeploy — yangi commit'ni o'zi o'rnatadi ===");
+  await writeFile(join(REMOTE, "bot/index.ts"), "// 3-versiya\nconsole.log(\"v3\");\n", "utf8");
+  await writeFile(join(REMOTE, "avtomatik-fayl.txt"), "avtomatik\n", "utf8");
+  git(["add", "-A"], REMOTE);
+  git(["commit", "-q", "-m", "v6-avtomatik-yangilash"], REMOTE);
+  const auto = run(autodeployPath, [], WORK, autoEnv);
+  assert(auto.status === 0, `autodeploy xatosiz tugadi (kod ${auto.status})`);
+  assert(/\d+ ta yangi commit topildi/.test(auto.output), "yangi commit topilgani aytildi");
+  assert(auto.output.includes("v6-avtomatik-yangilash"), "commit sarlavhasi jurnalga chiqdi");
+  assert(auto.output.includes("Yangilandi (git pull)"), "to'liq deploy bajarildi (git pull)");
+  assert(auto.output.includes("Sayt yig'ilmoqda"), "sayt qayta yig'ildi (dist)");
+  assert(auto.output.includes("nginx qayta o'qitildi"), "nginx qayta o'qitildi");
+  assert(
+    (await readFile(`${APP}/bot/index.ts`, "utf8")).includes("3-versiya"),
+    "yangi commit serverga o'rnatildi",
+  );
+  assert(existsSync(`${APP}/avtomatik-fayl.txt`), "kelgan commitning yangi fayli ham joyida");
+  assert(restartsNow() > restartsBefore, "bot avtomatik qayta ishga tushirildi");
+  assert(tokenInEnv() === token, "avtomatik deploy ham .env ni saqlab qoldi");
+  assert(auto.output.includes("tayyor:"), "natija jurnalga yozildi (tayyor)");
+
+  console.log("\n=== 10-holat: autodeploy --check — bor-yo'qini aytadi, o'rnatmaydi ===");
+  await writeFile(join(REMOTE, "tekshiruv-fayl.txt"), "tekshiruv\n", "utf8");
+  git(["add", "-A"], REMOTE);
+  git(["commit", "-q", "-m", "v7-check"], REMOTE);
+  const restartsBeforeCheck = restartsNow();
+  const checkOnly = run(autodeployPath, ["--check"], WORK, autoEnv);
+  assert(checkOnly.status === 0, `--check xatosiz tugadi (kod ${checkOnly.status})`);
+  assert(checkOnly.output.includes("ta yangi commit topildi"), "--check yangilanish borligini ko'rsatdi");
+  assert(checkOnly.output.includes("--check: faqat tekshirildi"), "deploy qilinmagani aytildi");
+  assert(!existsSync(`${APP}/tekshiruv-fayl.txt`), "--check hech narsa o'rnatmadi");
+  assert(restartsNow() === restartsBeforeCheck, "--check botni qayta ishga tushirmadi");
+
+  console.log("\n=== 11-holat: autodeploy — fetch yiqilsa tinch turadi ===");
+  const goodOrigin = spawnSync("git", ["-C", APP, "remote", "get-url", "origin"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  git(["remote", "set-url", "origin", `file://${WORK}/yoq-repozitoriy`], APP);
+  const restartsBeforeBroken = restartsNow();
+  const broken = run(autodeployPath, [], WORK, autoEnv);
+  assert(broken.status === 0, `tarmoq xatosi skriptni yiqitmadi (kod ${broken.status})`);
+  assert(
+    broken.output.includes("git fetch bajarilmadi"),
+    "fetch xatosi ogohlantirish bilan aytildi",
+  );
+  assert(restartsNow() === restartsBeforeBroken, "fetch yiqilganda hech narsa o'rnatilmadi");
+  git(["remote", "set-url", "origin", goodOrigin], APP);
+
   if (failures > 0) {
     console.error(`\nDEPLOY TEKSHIRUVI YIQILDI: ${failures} ta shart bajarilmadi.`);
     process.exit(1);
   }
-  console.log("\nDeploy tekshiruvi o'tdi: clone → .env saqlanishi → pull → yangilanish → xavfsiz qayta ishga tushish → serverdagi o'zgarishlarni zaxiralash.");
+  console.log(
+    "\nDeploy tekshiruvi o'tdi: clone → .env saqlanishi → pull → yangilanish → " +
+      "xavfsiz qayta ishga tushish → serverdagi o'zgarishlarni zaxiralash → " +
+      "avtomatik yangilash (build, nginx, taymer).",
+  );
 }
 
 main().catch((error) => {

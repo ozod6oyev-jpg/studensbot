@@ -5,18 +5,32 @@
 #   bash deploy.sh                              # loyiha shu papkada turgan bo'lsa
 #   bash deploy.sh https://github.com/siz/daftar-bot   # git'dan yuklab o'rnatish
 #   bash deploy.sh --token-file=/root/token.txt  # tokenni fayldan o'qib o'rnatish
+#   bash deploy.sh --no-autodeploy                # avtomatik yangilashni o'chirish
+#
+# Git manzilini argument o'rniga muhit o'zgaruvchisi bilan ham berish mumkin
+# (tokenli manzil `ps` chiqishida ko'rinmasligi uchun):
+#   REMOTE_URL=https://github.com/siz/daftar-bot bash deploy.sh
+#
+# Skript TO'LIQ yangilashni bajaradi: git pull (yoki rsync) → `bun install` →
+# saytni yig'ish (`dist/`) → systemd xizmatini qayta ishga tushirish → nginx ni
+# qayta o'qitish. Git'dagi yangi commit'lar shu skriptni o'zi chaqirishi uchun
+# avtomatik yangilash taymeri ham o'rnatiladi (deploy/autodeploy.sh).
 #
 # Skript idempotent: qayta ishga tushirilsa ham xavfsiz (mavjud sozlamalar va
 # ma'lumotlar saqlanib qoladi, xizmat qayta ishga tushiriladi).
 set -euo pipefail
 
-REMOTE_URL=""
+REMOTE_URL="${REMOTE_URL:-}"
 # Tokenni qo'lda fayl tahrirlamasdan kiritish uchun: --token-file=/yo'l/fayl
 TOKEN_FILE=""
+# Avtomatik yangilash taymeri o'rnatilsinmi (o'chirish: --no-autodeploy).
+AUTODEPLOY=1
 for argument in "$@"; do
   case "$argument" in
     --token-file=*) TOKEN_FILE="${argument#--token-file=}" ;;
     --token-file) fail_param="--token-file=/yo'l/fayl ko'rinishida yoziladi" ;;
+    --autodeploy) AUTODEPLOY=1 ;;
+    --no-autodeploy) AUTODEPLOY=0 ;;
     -*) fail_param="Noma'lum parametr: ${argument}" ;;
     *) REMOTE_URL="$argument" ;;
   esac
@@ -43,6 +57,11 @@ DATA_DIR="/var/lib/daftar-bot"
 SERVICE_NAME="daftar-bot"
 UNIT_SOURCE="${SCRIPT_DIR}/daftar-bot.service"
 UNIT_TARGET="/etc/systemd/system/${SERVICE_NAME}.service"
+# Avtomatik yangilash: taymer + uni chaqiradigan oneshot xizmat.
+AUTODEPLOY_SERVICE="daftar-autodeploy.service"
+AUTODEPLOY_TIMER="daftar-autodeploy.timer"
+AUTODEPLOY_SERVICE_SOURCE="${SCRIPT_DIR}/${AUTODEPLOY_SERVICE}"
+AUTODEPLOY_TIMER_SOURCE="${SCRIPT_DIR}/${AUTODEPLOY_TIMER}"
 
 # Skript o'rnatilgan papkaning o'zidan ishga tushirilsa va git manzili berilgan
 # bo'lsa, pastda shu papka tozalanadi — skript faylining o'zi ham o'chib qolib,
@@ -67,6 +86,10 @@ info "Daftar Bot o'rnatilmoqda"
 [ "$EUID" -eq 0 ] || fail "Bu skript root huquqi bilan ishga tushirilishi kerak: sudo bash deploy.sh"
 command -v apt-get >/dev/null 2>&1 || fail "Bu skript Ubuntu/Debian uchun (apt-get topilmadi)."
 [ -f "$UNIT_SOURCE" ] || fail "deploy/daftar-bot.service topilmadi — deploy/ papkasi bilan birga ishga tushiring."
+if [ "$AUTODEPLOY" = "1" ]; then
+  [ -f "$AUTODEPLOY_SERVICE_SOURCE" ] || fail "deploy/${AUTODEPLOY_SERVICE} topilmadi — deploy/ papkasi bilan birga ishga tushiring."
+  [ -f "$AUTODEPLOY_TIMER_SOURCE" ] || fail "deploy/${AUTODEPLOY_TIMER} topilmadi — deploy/ papkasi bilan birga ishga tushiring."
+fi
 
 if [ -z "$REMOTE_URL" ]; then
   [ -f "${SOURCE_DIR}/bot/index.ts" ] || fail "Loyiha fayllari topilmadi. Git manzilini bering: bash deploy.sh https://github.com/siz/daftar-bot"
@@ -236,6 +259,19 @@ info "Bog'liqliklar o'rnatilmoqda (bun install)"
 (cd "$APP_DIR" && runuser -u daftar -- /usr/local/bin/bun install)
 ok "Bog'liqliklar tayyor"
 
+# ------------------------------ sayt (dist) ------------------------------
+
+# Sayt statik: nginx `${APP_DIR}/dist` papkasini ko'rsatadi (deploy/README.md),
+# shuning uchun har bir yangilanishda uni qayta yig'amiz — aks holda yangi
+# kod serverga tushadi-yu, brauzerda eski sayt ochilib qoladi.
+info "Sayt yig'ilmoqda (bun run build)"
+if grep -q '"build"' "${APP_DIR}/package.json" 2>/dev/null; then
+  (cd "$APP_DIR" && runuser -u daftar -- /usr/local/bin/bun run build)
+  ok "Sayt tayyor: ${APP_DIR}/dist"
+else
+  warn "package.json da \"build\" skripti yo'q — sayt yig'ilmadi"
+fi
+
 # --------------------------------- .env -----------------------------------
 
 info "Maxfiy kalitlar fayli"
@@ -296,6 +332,38 @@ systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
 systemctl restart "$SERVICE_NAME"
 ok "Xizmat yoqildi va ishga tushirildi: ${SERVICE_NAME}"
 
+# ---------------------- nginx (sayt yangi fayllari) ----------------------
+
+# nginx dist/ fayllarini to'g'ridan-to'g'ri o'qiydi — konfiguratsiya o'zgarmasa
+# ham qayta o'qitish ochiq ulanishlarga yangi HTML ni darhol beradi.
+if systemctl is-active --quiet nginx 2>/dev/null; then
+  if systemctl reload nginx >/dev/null 2>&1; then
+    ok "nginx qayta o'qitildi"
+  else
+    warn "nginx ni qayta o'qitib bo'lmadi: sudo nginx -t"
+  fi
+else
+  ok "nginx faol emas — sayt faqat ${APP_DIR}/dist da yangilandi"
+fi
+
+# ------------------------- avtomatik yangilash ----------------------------
+
+if [ "$AUTODEPLOY" = "1" ]; then
+  info "Avtomatik yangilash o'rnatilmoqda (har 2 daqiqada)"
+  install -m 644 "$AUTODEPLOY_SERVICE_SOURCE" "/etc/systemd/system/${AUTODEPLOY_SERVICE}"
+  install -m 644 "$AUTODEPLOY_TIMER_SOURCE" "/etc/systemd/system/${AUTODEPLOY_TIMER}"
+  systemctl daemon-reload
+  if systemctl enable --now "$AUTODEPLOY_TIMER" >/dev/null 2>&1; then
+    ok "Taymer yoqildi: git'dagi yangi commit o'zi o'rnatiladi (${AUTODEPLOY_TIMER})"
+  else
+    warn "taymerni yoqib bo'lmadi: sudo systemctl enable --now ${AUTODEPLOY_TIMER}"
+  fi
+else
+  info "Avtomatik yangilash o'chirilmoqda (--no-autodeploy)"
+  systemctl disable --now "$AUTODEPLOY_TIMER" >/dev/null 2>&1 || true
+  ok "Taymer o'chirildi — yangilash faqat qo'lda: sudo bash deploy/deploy.sh"
+fi
+
 # ------------------------------- yakun ------------------------------------
 
 if grep -qE '^TELEGRAM_BOT_TOKEN=[^[:space:]]+' "$ENV_FILE"; then
@@ -314,6 +382,11 @@ systemctl status --no-pager "$SERVICE_NAME" | head -20 || true
 
 printf '\nFoydali buyruqlar:\n'
 printf '  Loglarni kuzatish : journalctl -u %s -f\n' "$SERVICE_NAME"
+printf '  Yangilanishlar    : journalctl -u daftar-autodeploy -n 50\n'
+printf '  Taymer holati     : systemctl list-timers daftar-autodeploy.timer\n'
+printf '  Hoziroq yangilash : sudo bash %s/deploy/autodeploy.sh\n' "$APP_DIR"
+printf '  Yangilanishni tekshirish : sudo bash %s/deploy/autodeploy.sh --check\n' "$APP_DIR"
+printf '  Avtomatikni o'"'"'chirish : sudo systemctl disable --now daftar-autodeploy.timer\n'
 printf '  Qayta ishga tushirish : systemctl restart %s\n' "$SERVICE_NAME"
 printf '  To'"'"'xtatish : systemctl stop %s\n' "$SERVICE_NAME"
 printf '  Bot haqida ma'"'"'lumot : runuser -u daftar -- /usr/local/bin/bun run %s/bot/index.ts info\n\n' "$APP_DIR"

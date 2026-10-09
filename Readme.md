@@ -249,7 +249,7 @@ bot **butun ro'yxatni emas**, faqat qisqa maslahat qaytaradi):
 | `/size 34` | yozuv o'lchami (26–52) |
 | `/file` | natijani rasm emas, PNG fayl qilib yuborish |
 | `/id` | chat ID'ni ko'rsatadi (sozlashda yordam beradi); xuddi shu narsa `🆔 Chat ID` tugmasida ham bor |
-| `/studio` | Studioni Mini App sifatida ochadigan tugma yuboradi (`MINI_APP_URL` sozlangan bo'lsa) |
+| `/studio` | Studioni Mini App sifatida ochadigan tugma yuboradi (`MINI_APP_URL` sozlangan bo'lsa); sozlanmagan bo'lsa faqat qisqa javob beriladi — ulash bo'yicha texnik ko'rsatmalar foydalanuvchiga emas, bot egasiga (`deploy/README.md`) tegishli |
 
 ## Muhit o'zgaruvchilari
 
@@ -271,9 +271,12 @@ O'z Ubuntu/Debian serveringizga botni doimiy xizmat sifatida o'rnatish uchun tay
 qadam-baqadam qo'llanma `deploy/` papkasida:
 
 - **[deploy/README.md](deploy/README.md)** — SSH dan tortib loglarni kuzatishgacha bo'lgan to'liq qo'llanma;
-- **`deploy/deploy.sh`** — Bun, kerakli paketlar, `daftar` foydalanuvchisi, loyiha fayllari va systemd
-  xizmatini bir marta o'rnatadi (qayta ishga tushirish xavfsiz, `.env` saqlanib qoladi);
-- **`deploy/daftar-bot.service`** — systemd unit fayli (`systemctl enable --now daftar-bot`).
+- **`deploy/deploy.sh`** — Bun, kerakli paketlar, `daftar` foydalanuvchisi, loyiha fayllari, sayt
+  (`dist/`), systemd xizmati va avtomatik yangilash taymerini o'rnatadi (qayta ishga tushirish
+  xavfsiz, `.env` saqlanib qoladi);
+- **`deploy/daftar-bot.service`** — systemd unit fayli (`systemctl enable --now daftar-bot`);
+- **`deploy/autodeploy.sh`** va **`deploy/daftar-autodeploy.timer`** — git'dagi yangi commit'ni
+  sezib, yangilanishni o'zi o'rnatadigan taymer (har 2 daqiqada tekshiradi).
 
 Qisqacha:
 
@@ -281,11 +284,23 @@ Qisqacha:
 sudo bash deploy/deploy.sh                       # loyiha shu papkada
 sudo bash deploy/deploy.sh https://github.com/siz/daftar-bot.git   # git'dan
 sudo bash deploy/deploy.sh --token-file=/root/token.txt            # tokenni fayldan o'qib o'rnatish
-cd ~/daftar-bot && git pull && sudo bash deploy/deploy.sh   # yangilash (kod papkasida)
+cd ~/daftar-bot && git pull && sudo bash deploy/deploy.sh   # birinchi marta: taymerni o'rnatadi
 ```
 
-> `/opt/daftar-bot` — **o'rnatilgan** nusxa (`.git` yo'q), shuning uchun u yerda `git pull`
-> xato beradi: kod manba papkada yangilanadi. Batafsil: [deploy/README.md](deploy/README.md).
+Serverda **avtomatik yangilash** ishlaydi: `daftar-autodeploy.timer` har 2 daqiqada `origin` ni
+tekshiradi va yangi commit bo'lsa to'liq yangilashni o'zi bajaradi — `git pull` → `bun install` →
+saytni yig'ish (`dist/`) → `daftar-bot` xizmatini qayta ishga tushirish → `nginx` ni qayta o'qitish.
+Ya'ni repozitoriyga push qilingan o'zgarish ~2 daqiqa ichida serverda ko'rinadi va har safar
+qo'lda `git pull && sudo bash deploy/deploy.sh` yozish (yoki serverga kirish) shart emas. Yuqoridagi
+qo'lda yangilash buyrug'i faqat **birinchi marta** — taymer hali o'rnatilmagan bo'lsa yoki u
+`--no-autodeploy` bilan o'chirilgan bo'lsa kerak bo'ladi; holatni `journalctl -u daftar-autodeploy -n 50`
+va `sudo bash /opt/daftar-bot/deploy/autodeploy.sh --check` ko'rsatadi.
+
+> `/opt/daftar-bot` — **o'rnatilgan** nusxa. U `git clone` bilan o'rnatilgan bo'lsa ichida `.git`
+> bor va yangilashni taymer o'zi bajaradi (qo'lda `git pull` yozilmaydi). `rsync` bilan
+> ko'chirilgan bo'lsa `.git` yo'q — bunday holda taymer ishga tushmaydi: yangilashni qo'lda
+> o'rnatasiz yoki kodni `git clone` bilan qayta o'rnatasiz. Kod manbasi har doim repo papkasi.
+> Batafsil: [deploy/README.md](deploy/README.md).
 
 ### Telegram Mini App
 
@@ -307,6 +322,18 @@ bir zumda vaqtinchalik HTTPS manzil beradi — ikkalasi ham qadam-baqadam
    endpointini ochadi va menyu tugmasini o'zi o'rnatadi;
 3. nginx (sayt `dist/` dan, `/mini-app/` bot portiga) va certbot sozlamasi to'liq nginx
    bloki bilan [deploy/README.md](deploy/README.md) da.
+
+Mini App ichida matn yozishdan oldin **qaysi daftarga** yozilishini tanlaysiz, **qaysi qatordan**
+boshlanishini esa daftar varaqasining o'zida (qatorni bosib) belgilaysiz. Buning uchun bot
+`POST /mini-app/state` so'roviga daftarlar ro'yxati va tanlangan daftarning joriy beti holatini
+qaytaradi (`notebooks`, `activeId`, `side`); `POST /mini-app/send` esa `notebookId` hamda
+`startLine` maydonlarini qabul qiladi — nginx'dagi `/mini-app/` proxy'si o'zgarishsiz qoladi.
+
+Daftar bilan bog'liq ishlar ham Mini App'dan bajariladi: `POST /mini-app/notebook` so'rovi
+`action` maydonini oladi va chatdagi tugmalar bilan bir xil ishni qiladi — `create` (varaq soni
+va qog'oz turi bilan yangi daftar), `rename`, `remove`, `undo` (oxirgi yozuv/o'chirishni orqaga
+qaytarish) va `book` (yozilgan betlarni PDF kitob qilib chatga yuborish). Amal natijasi qisqa
+xabar bo'lib qaytadi; begona chatning daftari ustida amal bajarilmaydi.
 
 Sayt va API turli domenda bo'lsa, yig'ishdan oldin
 `VITE_MINI_APP_ENDPOINT=https://bot.domen.uz/mini-app/send` beriladi.
@@ -332,6 +359,8 @@ Qo'lda ishga tushirish variantlari:
 | Belgida ogohlantirish | belgi shriftda yo'q — javobdagi ogohlantirishni o'qing |
 | Kirill harflar boshqacha ko'rinadi | tanlangan shriftda kirill yo'q — `/fonts` bilan kirillcha biladigan shriftni tanlang |
 | Matn rasm bo'lib qaytmayapti | avval `➕ Yangi daftar` bilan daftar yaratib, `✍️ Matn kiritish` orqali uni tanlang — daftarsiz matn yozilmaydi |
+| Namunadan tashqari kelgan surat | surat faqat `🖋 Uslubimni nusxalash` qadamlarida qabul qilinadi; boshqa paytda bot jim turadi va ortiqcha yo'l-yo'riq yubormaydi |
+| Faqat havoladan iborat xabar | daftarga yozilmaydi (manzil varaqada foydasiz) va bot bunga javob qaytarmaydi |
 | Daftar to'ldi | varaqlari tugaganda bot yangi daftar yaratishni aytadi; `📚 Daftarlar` bo'limidan yangisini oching |
 | `⬇️ PDF yuklab olish` ishlamayapti (bo'sh javob) | daftarda hali yozilgan bet yo'q — avval `✍️ Matn kiritish` orqali matn yuboring, keyin yuklab oling |
 | Shrift kutubxonasi yangilanmayapti | `bun scripts/fetch-fonts.ts` ni ishga tushiring; xato bo'lsa internetni tekshiring |
@@ -345,7 +374,7 @@ Qo'lda ishga tushirish variantlari:
 bun run check          # hamma tekshiruv ketma-ket
 bun run check:render   # namuna varaqalar (PNG), matematika geometriyasi, sahifalash
 bun run check:bot      # bot: soxta Telegram server bilan matn → rasm → yuborish oqimi (token kerak emas)
-bun run check:mini-app # Mini App: initData imzosi, menyu tugmasi va POST /mini-app/send
+bun run check:mini-app # Mini App: initData imzosi, menyu tugmasi, send/state/notebook yo'llari
 bun run check:sheet    # shriftlar ro'yxati rasmi (nomlar o'z shriftida, ingichka varaqa)
 bun run check:pdf      # kitob PDF: tuzilish, JPEG sahifalar, qismlarga bo'lish
 bun run check:deploy   # deploy.sh: clone → .env saqlanishi → git pull → yangilanish (root kerak)
@@ -361,9 +390,10 @@ ham root ostida ishlaydi).
 
 `check:mini-app` Mini App zanjirini boshdan-oxiriga tekshiradi: `initData` imzosi qabul
 qilinishi va buzilgan, eskirgan yoki boshqa token bilan imzolangan ma'lumot rad etilishi,
-botning menyu tugmasini Studio'ga bog'lashi (pastdagi menyuda ham) hamda
-`POST /mini-app/send` so'rovi natijasida chatga haqiqiy PNG varaqa kelishi. Mock Telegram
-API ishlatiladi, shuning uchun token yoki internet kerak emas.
+botning menyu tugmasini Studio'ga bog'lashi (pastdagi menyuda ham), `POST /mini-app/send`
+so'rovi natijasida chatga haqiqiy PNG varaqa kelishi hamda `POST /mini-app/notebook`
+bilan daftar yaratish, nomlash, o'chirish, oxirgi yozuvni orqaga qaytarish va PDF kitobni
+chatga yuborish. Mock Telegram API ishlatiladi, shuning uchun token yoki internet kerak emas.
 
 `check:render` namunalarni `/tmp/daftar-check/` papkasiga yozadi va natijani ASCII ko'rinishida
 chiqaradi — rasm haqiqatan daftarga o'xshashini shu yerda ko'rish mumkin.

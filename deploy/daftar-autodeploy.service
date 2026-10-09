@@ -1,0 +1,25 @@
+[Unit]
+# Daftar Bot — git'dagi yangi commit'ni sezib to'liq deploy qiladigan birlik.
+#
+# Buni `deploy/daftar-autodeploy.timer` har 2 daqiqada chaqiradi; ikkala faylni
+# deploy.sh /etc/systemd/system/ ga o'zi o'rnatadi va taymerni yoqadi.
+#
+# Qo'lda sinash : sudo bash /opt/daftar-bot/deploy/autodeploy.sh --check
+# Holat         : journalctl -u daftar-autodeploy -n 50
+# To'xtatish    : sudo systemctl disable --now daftar-autodeploy.timer
+Description=Daftar Bot — git'dagi yangi commit'ni o'rnatish (avtomatik deploy)
+Documentation=file:/opt/daftar-bot/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+# Papkada git nusxasi bo'lmasa (rsync bilan o'rnatilgan) ishga tushmaydi.
+ConditionPathIsDirectory=/opt/daftar-bot/.git
+
+[Service]
+Type=oneshot
+# deploy.sh tizim buyruqlarini (apt, useradd, systemctl) ishlatadi — root kerak.
+WorkingDirectory=/opt/daftar-bot
+# O'zgarish bo'lmasa skript darhol chiqadi; deploy + sayt yig'ish bir necha
+# daqiqa olishi mumkin, shuning uchun chegara keng qo'yilgan.
+TimeoutStartSec=1800
+Nice=5
+ExecStart=/bin/bash /opt/daftar-bot/deploy/autodeploy.sh
