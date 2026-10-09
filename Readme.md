@@ -276,7 +276,9 @@ qadam-baqadam qo'llanma `deploy/` papkasida:
   xavfsiz, `.env` saqlanib qoladi);
 - **`deploy/daftar-bot.service`** — systemd unit fayli (`systemctl enable --now daftar-bot`);
 - **`deploy/autodeploy.sh`** va **`deploy/daftar-autodeploy.timer`** — git'dagi yangi commit'ni
-  sezib, yangilanishni o'zi o'rnatadigan taymer (har 2 daqiqada tekshiradi).
+  sezib, yangilanishni o'zi o'rnatadigan taymer (har 2 daqiqada tekshiradi);
+- **`.github/workflows/deploy.yml`** — push qilingan zahoti serverga SSH orqali deploy qiladigan
+  GitHub Actions ish oqimi (taymerga qo'shimcha tezkor yo'l; sozlash — `deploy/README.md`).
 
 Qisqacha:
 
@@ -301,6 +303,11 @@ serverga kirib qo'lda yangilash yozish shart emas. Yuqoridagi
 qo'lda yangilash buyrug'i faqat **birinchi marta** — taymer hali o'rnatilmagan bo'lsa yoki u
 `--no-autodeploy` bilan o'chirilgan bo'lsa kerak bo'ladi; holatni `journalctl -u daftar-autodeploy -n 50`
 va `sudo bash /opt/daftar-bot/deploy/autodeploy.sh --check` ko'rsatadi.
+
+Push qilingan zahoti (2 daqiqani kutmasdan) o'rnatilishini istasangiz, repozitoriyada GitHub Actions
+ish oqimi ham bor: `.github/workflows/deploy.yml` `main` shoxiga push bo'lganda serverga SSH orqali
+kirib, xuddi shu `autodeploy.sh` ni chaqiradi. Sozlash bir marta — kalit, sudo ruxsati va repo
+maxfiy qiymatlari: [deploy/README.md](deploy/README.md) → «Push bo'lishi bilan deploy» bo'limi.
 
 > `/opt/daftar-bot` — **o'rnatilgan** nusxa. U `git clone` bilan o'rnatilgan bo'lsa ichida `.git`
 > bor va yangilashni taymer o'zi bajaradi (qo'lda `git pull` yozilmaydi). `rsync` bilan

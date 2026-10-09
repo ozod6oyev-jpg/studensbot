@@ -1,0 +1,74 @@
+# Daftar Bot — push qilingan zahoti serverga deploy (GitHub Actions + SSH).
+#
+# Ishlashi: `main` shoxiga push bo'lganda GitHub runneri serverga SSH bilan
+# kiradi va serverdagi `deploy/autodeploy.sh` ni ishga tushiradi. Skript yangi
+# commitni o'zi oladi va to'liq yangilashni bajaradi:
+#
+#   git pull → bun install → bun run build (dist/) → systemctl restart → nginx reload
+#
+# O'zgarish bo'lmasa hech narsa qilmaydi — taymer allaqachon o'rnatgan bo'lsa
+# ortiqcha build ham, restart ham bo'lmaydi.
+#
+# Sozlash (bir marta): deploy/README.md → «Push bo'lishi bilan deploy» bo'limi.
+# Kerakli secrets : DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY
+# Ixtiyoriy       : DEPLOY_PORT (standart 22), DEPLOY_KNOWN_HOSTS
+#
+# Tashqi action ishlatilmaydi (faqat `ssh` va `ssh-keyscan`): repozitoriyga
+# qo'shimcha uchinchi tomon kodi tushmaydi.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  # Qo'lda ishga tushirish: Actions → Deploy → Run workflow.
+  workflow_dispatch:
+
+# Ish uchun repozitoriy tokeni kerak emas — ruxsatlar butunlay yopiq.
+permissions: {}
+
+# Ikki deploy bir vaqtda ishlamasin — keyingi urinish navbatda kutadi
+# (serverdagi `flock` ham qo'shni nusxani to'xtatadi).
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: SSH kalitni tayyorlash
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          port="${DEPLOY_PORT:-22}"
+          if [ -n "${DEPLOY_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            # Host kaliti birinchi ulanishda olinadi (trust on first use).
+            # Barqarorroq: DEPLOY_KNOWN_HOSTS ga `ssh-keyscan -H domen.uz` natijasini yozing.
+            ssh-keyscan -p "$port" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+      - name: Serverga deploy (autodeploy.sh)
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_key \
+            -p "${DEPLOY_PORT:-22}" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            "${DEPLOY_USER:-daftar}@${DEPLOY_HOST}" \
+            'sudo -n /bin/bash /opt/daftar-bot/deploy/autodeploy.sh'

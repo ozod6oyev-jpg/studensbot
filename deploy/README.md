@@ -257,6 +257,9 @@ git pull  →  bun install  →  bun run build (dist/)  →  systemctl restart d
 Ya'ni repozitoriyga push qilingan har bir o'zgarish ~2 daqiqa ichida serverga o'rnatiladi.
 O'zgarish bo'lmasa skript hech narsa qilmaydi — na build, na restart.
 
+> Push bo'lishi bilan (bir necha o'n soniyada) o'rnatilishini istasangiz — keyingi bo'lim:
+> **GitHub Actions + SSH** (u ham xuddi shu skriptni chaqiradi, taymer esa zaxira bo'lib qoladi).
+
 > **Bir marta bajariladigan qadam (eski serverlar uchun):** taymer paydo bo'lishi uchun
 > yangilanishni **bir marta qo'lda** olish kerak. Kod allaqachon serverda bo'lsa,
 > repozitoriy manzili bilan qayta ishga tushirish kifoya:
@@ -301,6 +304,87 @@ Skriptning ehtiyot choralari:
   tushmaydi (`ConditionPathIsDirectory`) — bunday holda kod `git clone` bilan o'rnatilishi kerak;
 - tekshirish oralig'ini o'zgartirish: `daftar-autodeploy.timer` dagi `OnUnitActiveSec` (standart
   `2min`), so'ng `sudo systemctl daemon-reload && sudo systemctl restart daftar-autodeploy.timer`.
+
+## Push bo'lishi bilan deploy (GitHub Actions + SSH)
+
+Yuqoridagi taymer yangilanishni **2 daqiqa ichida** o'rnatadi. Push qilingan zahoti — bir necha
+o'n soniyada — o'rnatilishini istasangiz, repozitoriyada GitHub Actions ish oqimi bor:
+`.github/workflows/deploy.yml` `main` shoxiga push bo'lganda GitHub runneridan serverga **SSH**
+bilan kirib, serverdagi `deploy/autodeploy.sh` ni ishga tushiradi.
+
+```text
+push  →  GitHub runner  →  ssh  →  sudo -n /bin/bash /opt/daftar-bot/deploy/autodeploy.sh
+      →  git pull  →  bun install  →  bun run build  →  systemctl restart daftar-bot  →  nginx reload
+```
+
+> **Taymer ham qoladi** — u zaxira: GitHub ishlamasa, tarmoq uzilsa yoki ish oqimi o'chirilgan
+> bo'lsa, taymer baribir yangilanishni o'rnatadi. Faqat Actions ishlashini istasangiz:
+> `sudo systemctl disable --now daftar-autodeploy.timer`.
+
+### 1. Serverda kalit va cheklangan buyruq (bir marta)
+
+`daftar` foydalanuvchisi uchun alohida kalit yaratiladi va u **faqat shu bitta buyruqni** bajara
+oladigan qilib cheklanadi — kalit qo'lga tushsa ham serverda boshqa hech narsa qilinmaydi.
+
+```bash
+# 0) `daftar` ga login qobig'i: deploy.sh uni `nologin` bilan yaratadi, shuning
+#    uchun SSH orqali kirish rad etiladi. Qobiq berilsa ham kalit baribir
+#    faqat bitta buyruqni bajaradi (pastdagi `command=` cheklovi).
+sudo usermod -s /bin/bash daftar
+
+# 1) .ssh papkasi va parolsiz kalit (faqat deploy uchun).
+#    Yo'llar to'liq yoziladi — HOME'ga bog'liq bo'lmasin.
+sudo -u daftar install -d -m 700 /home/daftar/.ssh
+sudo -u daftar ssh-keygen -t ed25519 -N '' -C github-actions -f /home/daftar/.ssh/github-actions
+
+# 2) ochiq kalitni cheklangan buyruq bilan authorized_keys ga qo'shish
+sudo -u daftar bash -c 'echo "restrict,command=\"sudo -n /bin/bash /opt/daftar-bot/deploy/autodeploy.sh\" $(cat /home/daftar/.ssh/github-actions.pub)" >> /home/daftar/.ssh/authorized_keys'
+sudo chmod 600 /home/daftar/.ssh/authorized_keys
+
+# 3) daftar foydalanuvchisiga FAQAT shu skriptni root sifatida ishga tushirish ruxsati
+echo 'daftar ALL=(root) NOPASSWD: /bin/bash /opt/daftar-bot/deploy/autodeploy.sh' | sudo tee /etc/sudoers.d/daftar-deploy
+sudo chmod 440 /etc/sudoers.d/daftar-deploy
+sudo visudo -c                    # sintaksis tekshiruvi
+
+# 4) xuddi GitHub chaqiradigan buyruqni SSH'siz sinab ko'rish
+sudo -u daftar sudo -n /bin/bash /opt/daftar-bot/deploy/autodeploy.sh
+
+# 5) GitHub'ning o'zi kabi tashqaridan sinash (server_ip o'rniga haqiqiy manzil)
+ssh -i /home/daftar/.ssh/github-actions -o IdentitiesOnly=yes \
+  daftar@SERVER_IP 'sudo -n /bin/bash /opt/daftar-bot/deploy/autodeploy.sh'
+```
+
+Faqat `sudo -u daftar …` (4-qadam) ishlab, tashqaridan SSH (5-qadam) `Permission denied`
+bersa: `sshd_config` da `AllowUsers`/`DenyUsers`/`Match` yozuvi bor yoki 22-port firewall
+bilan yopiq — `daftar` shu ro'yxatga qo'shilsin (`sudo ufw allow OpenSSH`).
+
+Oxirgi buyruq «o'zgarish yo'q» deb aytib 0 bilan chiqishi (yoki yangilanishni o'rnatishi) kerak.
+
+### 2. GitHub'ga maxfiy qiymatlarni kiritish
+
+Repo → **Settings → Secrets and variables → Actions → New repository secret**:
+
+> GitHub bu sahifada tayyor ro'yxat ko'rsatmaydi — **`Name`** maydoniga jadvaldagi nomni yozib,
+> **`Secret`** maydoniga qiymatini qo'yib, **Add secret** bosiladi; keyin shu amal keyingi nom
+> uchun takrorlanadi. Ro'yxat dastlab bo'sh turadi. Majburiy: `DEPLOY_HOST`, `DEPLOY_USER`,
+> `DEPLOY_SSH_KEY`; `DEPLOY_PORT` va `DEPLOY_KNOWN_HOSTS` — ixtiyoriy (kerak bo'lmasa o'tkazing).
+
+| Nomi | Qiymati |
+| --- | --- |
+| `DEPLOY_HOST` | server IP manzili yoki domeni |
+| `DEPLOY_USER` | `daftar` |
+| `DEPLOY_SSH_KEY` | **maxfiy** kalitning to'liq matni: `sudo cat /home/daftar/.ssh/github-actions` |
+| `DEPLOY_PORT` | ixtiyoriy: SSH porti (standart `22`) |
+| `DEPLOY_KNOWN_HOSTS` | ixtiyoriy: `ssh-keyscan -H domen.uz` natijasi (bo'lmasa host kaliti birinchi ulanishda olinadi) |
+
+> `DEPLOY_SSH_KEY` — maxfiy qiymat: uni chatga, faylga yoki commitga yozmang, faqat shu bo'limga
+> kiriting. Kalit baribir faqat bitta buyruqni bajara oladi (1-bo'limdagi `command=` cheklovi).
+
+### 3. Sinash
+
+Push qiling yoki **Actions → Deploy → Run workflow**. Bajarilgan ish va xato (bo'lsa) shu ish
+logida ko'rinadi; taymer orqali bo'lgan yangilanishlar esa
+`journalctl -u daftar-autodeploy -n 50` da.
 
 ## Webhook rejimiga o'tish (ixtiyoriy)
 
@@ -653,6 +737,9 @@ Bunday holatda botning CORS tekshiruvi `MINI_APP_URL` domeniga ruxsat beradi —
 | `fatal: detected dubious ownership in repository at '/opt/daftar-bot'` | Root sifatida `daftar` foydalanuvchisiga tegishli papkada git ishlatyapsiz. Bu odatda kerak emas: yangilashni taymer yoki `sudo bash /opt/daftar-bot/deploy/deploy.sh <repo-manzili>` o'zi bajaradi va papkani root uchun "xavfsiz" deb belgilaydi. Qo'lda tuzatish: `sudo git config --global --add safe.directory /opt/daftar-bot` yoki `sudo -u daftar git -C /opt/daftar-bot pull` |
 | Yangilanish o'zi kelmayapti (push qildim, serverda o'zgarish yo'q) | `systemctl list-timers daftar-autodeploy.timer` (taymer yoqilganmi), `journalctl -u daftar-autodeploy -n 50`, `sudo bash /opt/daftar-bot/deploy/autodeploy.sh --check`. Ko'p uchraydigan sabablar: papkada `.git` yo'q (nusxa `rsync` bilan o'rnatilgan), `git fetch` uchun token/ruxsat yo'q yoki serverdagi nusxa upstream'dan oldinda |
 | Push qildim, sayt yangilanmadi | Taymerni kuting (~2 daqiqa) yoki `sudo bash /opt/daftar-bot/deploy/autodeploy.sh`. Sayt `dist/` dan o'qiladi va u har yangilashda qayta yig'iladi; brauzer eski sahifani ko'rsatsa — qattiq yangilang (`Ctrl+Shift+R`) |
+| GitHub Actions ishida `Permission denied (publickey)` | `DEPLOY_SSH_KEY` ga **maxfiy** kalit (`/home/daftar/.ssh/github-actions`) to'liq matni qo'yilganini, `DEPLOY_USER=daftar` ekanini va ochiq kalit serverdagi `~daftar/.ssh/authorized_keys` da borligini tekshiring |
+| GitHub Actions ishida `sudo: a password is required` | `/etc/sudoers.d/daftar-deploy` qoidasi yo'q yoki boshqa skriptga ishora qiladi — «Push bo'lishi bilan deploy» bo'limining 3-qadamini bajaring va `sudo visudo -c` bilan tekshiring |
+| GitHub Actions ishida `Host key verification failed` | `DEPLOY_KNOWN_HOSTS` xato yoki eski: uni `ssh-keyscan -H domen.uz` natijasi bilan yangilang (yoki bu sirni o'chirib tashlang — host kaliti birinchi ulanishda olinadi) |
 | `can't cd to /opt/daftar-bot` | `chown -R daftar:daftar /opt/daftar-bot` |
 | Sozlamalar yoki daftarlar saqlanmayapti | `/var/lib/daftar-bot` papkasi `daftar` foydalanuvchisiga tegishli bo'lishi kerak (`settings.json`, `notebooks.json`, `styles.json`) |
 | Rasm chiqmayapti | Matn yuborilganini va ochiq daftar borligini tekshiring: matn faqat tanlangan daftarga yoziladi, daftar bo'lmasa bot yangisini yaratishni aytadi |

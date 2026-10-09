@@ -32,7 +32,13 @@
  *   9. papka boshqa foydalanuvchiga tegishli bo'lsa ham root shu papkada git
  *      ishlata oladi: `deploy.sh` papkani `safe.directory` ga bir marta
  *      (takrorlamasdan) qo'shadi — aks holda git "detected dubious ownership"
- *      xatosi bilan to'xtaydi (foydalanuvchi shu xatoga uchragan edi).
+ *      xatosi bilan to'xtaydi (foydalanuvchi shu xatoga uchragan edi);
+ *  10. `.github/workflows/deploy.yml` (push → SSH → deploy) to'g'ri tuzilgan:
+ *      `main` push'ida ishga tushadi, tashqi action ishlatmaydi, kerakli maxfiy
+ *      qiymatlarni ishlatadi va qo'llanmadagi (`deploy/README.md`) buyruq hamda
+ *      sudo qoidasiga aynan mos keladi — ular bir xil bo'lmasa, GitHub'dagi
+ *      deploy jimgina yiqilardi. Sudo qoidasining sintaksisi `visudo -cf` bilan
+ *      tekshiriladi.
  * Skript root huquqini talab qiladi (deploy.sh ning o'zi ham): root bo'lmasa
  * tekshiruv bajarilmaydi va buni ochiq aytib, xato bilan tugaydi.
  */
@@ -48,6 +54,9 @@ const REAL_UNIT = join(REPO_DIR, "deploy/daftar-bot.service");
 const REAL_AUTODEPLOY = join(REPO_DIR, "deploy/autodeploy.sh");
 const REAL_AUTODEPLOY_SERVICE = join(REPO_DIR, "deploy/daftar-autodeploy.service");
 const REAL_AUTODEPLOY_TIMER = join(REPO_DIR, "deploy/daftar-autodeploy.timer");
+const REAL_WORKFLOW = join(REPO_DIR, ".github/workflows/deploy.yml");
+const DEPLOY_GUIDE = join(REPO_DIR, "deploy/README.md");
+const ROOT_README = join(REPO_DIR, "Readme.md");
 
 const WORK = "/tmp/daftar-deploy-check";
 const APP = `${WORK}/app`;
@@ -434,6 +443,96 @@ async function main(): Promise<void> {
   assert(restartsNow() === restartsBeforeBroken, "fetch yiqilganda hech narsa o'rnatilmadi");
   git(["remote", "set-url", "origin", goodOrigin], APP);
 
+  // ---- GitHub Actions: push → SSH → deploy --------------------------------
+  // Push bo'lishi bilan o'rnatadigan ikkinchi yo'l: `.github/workflows/deploy.yml`
+  // runnerdan serverga SSH bilan kirib, xuddi taymer chaqiradigan skriptni ishga
+  // tushiradi. Shu sababli ish oqimining tuzilishi va u bilan qo'llanma
+  // (`deploy/README.md`) o'rtasidagi moslik tekshiriladi: SSH orqali yuboriladigan
+  // buyruq hamda sudo qoidasi bir xil bo'lmasa, GitHub'dagi deploy jimgina yiqilardi.
+  interface BunYamlHost {
+    Bun?: { YAML?: { parse?: (input: string) => unknown } };
+  }
+  const parseYaml = (globalThis as BunYamlHost).Bun?.YAML?.parse;
+
+  console.log("\n=== 13-holat: GitHub Actions ish oqimi (push → SSH → deploy) ===");
+  assert(
+    existsSync(REAL_WORKFLOW),
+    `ish oqimi fayli mavjud (${REAL_WORKFLOW.replace(REPO_DIR, "")})`,
+  );
+  assert(typeof parseYaml === "function", "YAML parseri mavjud (skriptlar `bun` bilan ishga tushadi)");
+  const workflowText = existsSync(REAL_WORKFLOW) ? await readFile(REAL_WORKFLOW, "utf8") : "";
+  const parsed = typeof parseYaml === "function" ? parseYaml(workflowText) : null;
+  assert(parsed !== null && typeof parsed === "object", "ish oqimi YAML sifatida o'qildi (sintaksis to'g'ri)");
+
+  const workflow = (parsed ?? {}) as {
+    on?: Record<string, unknown>;
+    jobs?: Record<string, { "runs-on"?: string; steps?: { uses?: string; run?: string }[] }>;
+  };
+  const triggers = workflow.on ?? {};
+  const branches = (triggers.push as { branches?: string[] } | undefined)?.branches ?? [];
+  assert(branches.includes("main"), "faqat `main` shoxiga push bo'lganda ishga tushadi");
+  assert("workflow_dispatch" in triggers, "qo'lda ishga tushirish ham mumkin (workflow_dispatch)");
+
+  const job = workflow.jobs?.deploy;
+  assert(job !== undefined, "`deploy` jobi mavjud");
+  assert(job?.["runs-on"] === "ubuntu-latest", "job GitHub runnerida ishlaydi (ubuntu-latest)");
+  const steps = job?.steps ?? [];
+  assert(steps.length >= 2, `kalit tayyorlash va deploy qadamlari bor (${steps.length} qadam)`);
+  assert(
+    steps.every((step) => typeof step.uses !== "string"),
+    "tashqi action ishlatilmaydi (faqat ssh/ssh-keyscan)",
+  );
+  assert(
+    ["DEPLOY_HOST", "DEPLOY_USER", "DEPLOY_SSH_KEY"].every((key) =>
+      workflowText.includes(`secrets.${key}`),
+    ),
+    "kerakli maxfiy qiymatlar ishlatiladi (DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY)",
+  );
+
+  const deployCommand = "sudo -n /bin/bash /opt/daftar-bot/deploy/autodeploy.sh";
+  assert(
+    workflowText.includes(deployCommand),
+    "SSH orqali xuddi taymer chaqiradigan skript ishga tushiriladi",
+  );
+  const guide = await readFile(DEPLOY_GUIDE, "utf8");
+  assert(guide.includes(deployCommand), "qo'llanmada ham aynan shu buyruq yozilgan");
+  const sudoersLine = "daftar ALL=(root) NOPASSWD: /bin/bash /opt/daftar-bot/deploy/autodeploy.sh";
+  assert(
+    guide.includes(sudoersLine),
+    "qo'llanmada `daftar` ga faqat shu skriptni ruxsat qiluvchi sudo qoidasi bor",
+  );
+  // `daftar` — system foydalanuvchi: deploy.sh uni `nologin` qobiq bilan yaratadi,
+  // shuning uchun hujjat unga login qobig'i berishni aytishi shart — aks holda
+  // GitHub runnerining SSH urinishi "This account is currently not available" bilan yiqiladi.
+  assert(
+    guide.includes("sudo usermod -s /bin/bash daftar"),
+    "qo'llanmada `daftar` ga login qobig'i berilishi yozilgan (nologin bilan SSH ishlamaydi)",
+  );
+  const installer = await readFile(join(REPO_DIR, "deploy/deploy.sh"), "utf8");
+  assert(
+    installer.includes("--shell /usr/sbin/nologin"),
+    "o'rnatish skripti `daftar` ni baribir nologin bilan yaratadi (qo'llanma shuni to'g'rilaydi)",
+  );
+  assert(
+    guide.includes("/home/daftar/.ssh/github-actions.pub"),
+    "qo'llanmadagi kalit yo'llari to'liq yozilgan (HOME'ga bog'liq bo'lmasin)",
+  );
+  assert(
+    (await readFile(ROOT_README, "utf8")).includes(".github/workflows/deploy.yml"),
+    "asosiy Readme'dan ish oqimiga ishora bor",
+  );
+
+  // Sudo qoidasi matni haqiqatan to'g'ri sintaksis ekanini sudo'ning o'zi aytadi.
+  const sudoersFile = `${WORK}/daftar-sudoers`;
+  await writeFile(sudoersFile, `${sudoersLine}\n`, "utf8");
+  chmodSync(sudoersFile, 0o440);
+  const visudo = spawnSync("visudo", ["-cf", sudoersFile], { encoding: "utf8" });
+  const visudoError = visudo.error?.message ?? "";
+  assert(
+    visudo.status === 0,
+    `sudo qoidasi sintaksisi to'g'ri (visudo -cf${visudoError ? `: ${visudoError}` : ""})`,
+  );
+
   if (failures > 0) {
     console.error(`\nDEPLOY TEKSHIRUVI YIQILDI: ${failures} ta shart bajarilmadi.`);
     process.exit(1);
@@ -441,7 +540,8 @@ async function main(): Promise<void> {
   console.log(
     "\nDeploy tekshiruvi o'tdi: clone → .env saqlanishi → pull → yangilanish → " +
       "xavfsiz qayta ishga tushish → serverdagi o'zgarishlarni zaxiralash → " +
-      "root uchun git ruxsati → avtomatik yangilash (build, nginx, taymer).",
+      "root uchun git ruxsati → avtomatik yangilash (build, nginx, taymer) → " +
+      "GitHub Actions (push → SSH → deploy).",
   );
 }
 
