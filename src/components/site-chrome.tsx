@@ -8,9 +8,20 @@ const links = [
   { href: "/bot", label: "Botni ulash" },
 ];
 
-export function SiteHeader({ className }: { className?: string }) {
+export function SiteHeader({
+  className,
+  showBotSetup = true,
+}: {
+  className?: string;
+  /**
+   * `false` — «Botni ulash» havolasi ko'rsatilmaydi (Studio sahifasi: u yerda
+   * botni ulash haqidagi ma'lumot umuman chiqmaydi).
+   */
+  showBotSetup?: boolean;
+}) {
   const { pathname } = useLocation();
   const { active } = useMiniApp();
+  const navLinks = showBotSetup ? links : links.filter((link) => link.href !== "/bot");
 
   // Mini App ichida Telegram o'z sarlavhasini chizadi: sayt sarlavhasini
   // takrorlamaymiz (aks holda ekranda ikkita header bo'lib qoladi) va
@@ -38,7 +49,7 @@ export function SiteHeader({ className }: { className?: string }) {
         </Link>
 
         <nav className="flex items-center gap-1.5">
-          {links.map((link) => {
+          {navLinks.map((link) => {
             const active = pathname === link.href;
             return (
               <Link
@@ -65,7 +76,7 @@ export function SiteHeader({ className }: { className?: string }) {
   );
 }
 
-export function SiteFooter() {
+export function SiteFooter({ showBotSetup = true }: { showBotSetup?: boolean } = {}) {
   const { active } = useMiniApp();
 
   // Mini App ichida sayt futeri ham ortiqcha: Telegram oynasi tor va u yerda
@@ -83,12 +94,21 @@ export function SiteFooter() {
           <Link to="/studio" className="hover:text-ink">
             Studio
           </Link>
-          <Link to="/bot" className="hover:text-ink">
-            Botni ulash
-          </Link>
-          <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="hover:text-ink">
-            BotFather
-          </a>
+          {showBotSetup && (
+            <>
+              <Link to="/bot" className="hover:text-ink">
+                Botni ulash
+              </Link>
+              <a
+                href="https://t.me/BotFather"
+                target="_blank"
+                rel="noreferrer"
+                className="hover:text-ink"
+              >
+                BotFather
+              </a>
+            </>
+          )}
         </div>
       </div>
     </footer>
