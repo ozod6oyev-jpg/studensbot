@@ -224,6 +224,14 @@ sudo bash /opt/daftar-bot/deploy/deploy.sh https://github.com/ozod6oyev-jpg/stud
 > faqat yuqoridagi klon bajarilgan bo'lsa ishlaydi. Klon qilinmagan bo'lsa
 > `fatal: not a git repository` xatosi chiqadi — bu normal holat, kod manba
 > papkada yangilanadi.
+>
+> Papka `daftar` foydalanuvchisiga tegishli, shuning uchun **root** sifatida u yerda
+> git ishlatmoqchi bo'lsangiz git uni "begona" deb hisoblaydi
+> (`fatal: detected dubious ownership in repository at '/opt/daftar-bot'`). Buning
+> oldini `deploy.sh` oladi: u papkani root uchun `safe.directory` ga qo'shadi.
+> Qo'lda ham qo'shish mumkin: `sudo git config --global --add safe.directory /opt/daftar-bot`
+> (yoki umuman root sifatida emas, papka egasi nomidan yozing:
+> `sudo -u daftar git -C /opt/daftar-bot pull`).
 
 `deploy.sh` loyihani yangilab, bog'liqliklarni o'rnatadi va xizmatni qayta
 ishga tushiradi. `.env` va `/var/lib/daftar-bot` (chat sozlamalari va daftarlar:
@@ -250,13 +258,25 @@ Ya'ni repozitoriyga push qilingan har bir o'zgarish ~2 daqiqa ichida serverga o'
 O'zgarish bo'lmasa skript hech narsa qilmaydi — na build, na restart.
 
 > **Bir marta bajariladigan qadam (eski serverlar uchun):** taymer paydo bo'lishi uchun
-> o'zgarishni **bir marta qo'lda** olish kerak:
+> yangilanishni **bir marta qo'lda** olish kerak. Kod allaqachon serverda bo'lsa,
+> repozitoriy manzili bilan qayta ishga tushirish kifoya:
 >
 > ```bash
-> cd ~/daftar-bot && git pull && sudo bash deploy/deploy.sh
+> sudo bash /opt/daftar-bot/deploy/deploy.sh https://github.com/ozod6oyev-jpg/studensbot.git
 > ```
 >
-> Shundan keyin bu buyruq kerak emas — keyingi yangilanishlar o'zi o'rnatiladi.
+> (manzilni o'zingizning repozitoriy manzilingiz bilan almashtiring.) Shundan keyin
+> bu buyruq kerak emas — keyingi yangilanishlar o'zi o'rnatiladi.
+>
+> ⚠️ `/opt/daftar-bot` ichida **root sifatida `git pull` yozmang**. Papka `daftar`
+> foydalanuvchisiga tegishli, shuning uchun git
+> `fatal: detected dubious ownership in repository` xatosi bilan to'xtaydi. Yangilashni
+> `deploy.sh` va taymer o'zlari bajaradi; qo'lda kerak bo'lsa papka egasi nomidan
+> yozing:
+>
+> ```bash
+> sudo -u daftar git -C /opt/daftar-bot pull
+> ```
 
 | Buyruq | Nima qiladi |
 | --- | --- |
@@ -629,7 +649,8 @@ Bunday holatda botning CORS tekshiruvi `MINI_APP_URL` domeniga ruxsat beradi —
 | Xizmat ishga tushmayapti | `journalctl -u daftar-bot -n 50` — ko'pincha `.env` da token yo'q yoki Bun yo'li xato |
 | `Manba va maqsad papka bir xil (/opt/daftar-bot)` | Skript `/opt/daftar-bot` ichidan **manzilsiz** ishga tushirilgan — repozitoriy manzilini qo'shib qayta ishga tushiring: `sudo bash /opt/daftar-bot/deploy/deploy.sh https://github.com/ozod6oyev-jpg/studensbot.git` |
 | `git pull` to'xtaydi: `Your local changes would be overwritten` yoki `untracked working tree files would be overwritten` | O'rnatilgan nusxada saqlanmagan o'zgarish bor (masalan `bun install` `bun.lock` ni yangilagan) yoki kelayotgan versiya papkada allaqachon mavjud kuzatilmaydigan fayl qo'shmoqchi. `deploy.sh` hech narsani jimgina o'chirmaydi: `/var/lib/daftar-bot/deploy-backup-<sana>/` ichiga `changes.patch` (kuzatilgan fayllardagi o'zgarishlar) va `untracked/` (to'sqinlik qilgan fayllar) saqlanadi, so'ng yangilanish davom etadi. Patch'ni qaytarish: `sudo -u daftar git -C /opt/daftar-bot apply /var/lib/daftar-bot/deploy-backup-<sana>/changes.patch` |
-| `fatal: not a git repository` (`/opt/daftar-bot` ichida `git pull`) | Bu o'rnatilgan nusxa, manba emas — kodni manba papkada yangilang (`cd ~/daftar-bot && git pull`), keyin `sudo bash deploy/deploy.sh` |
+| `fatal: not a git repository` (`/opt/daftar-bot` ichida `git pull`) | Bu o'rnatilgan nusxa, manba emas — kodni manba papkada yangilang (`cd ~/daftar-bot && git pull`), keyin `sudo bash deploy/deploy.sh`. Yoki manzil bilan qayta o'rnating: `sudo bash /opt/daftar-bot/deploy/deploy.sh <repo-manzili>` |
+| `fatal: detected dubious ownership in repository at '/opt/daftar-bot'` | Root sifatida `daftar` foydalanuvchisiga tegishli papkada git ishlatyapsiz. Bu odatda kerak emas: yangilashni taymer yoki `sudo bash /opt/daftar-bot/deploy/deploy.sh <repo-manzili>` o'zi bajaradi va papkani root uchun "xavfsiz" deb belgilaydi. Qo'lda tuzatish: `sudo git config --global --add safe.directory /opt/daftar-bot` yoki `sudo -u daftar git -C /opt/daftar-bot pull` |
 | Yangilanish o'zi kelmayapti (push qildim, serverda o'zgarish yo'q) | `systemctl list-timers daftar-autodeploy.timer` (taymer yoqilganmi), `journalctl -u daftar-autodeploy -n 50`, `sudo bash /opt/daftar-bot/deploy/autodeploy.sh --check`. Ko'p uchraydigan sabablar: papkada `.git` yo'q (nusxa `rsync` bilan o'rnatilgan), `git fetch` uchun token/ruxsat yo'q yoki serverdagi nusxa upstream'dan oldinda |
 | Push qildim, sayt yangilanmadi | Taymerni kuting (~2 daqiqa) yoki `sudo bash /opt/daftar-bot/deploy/autodeploy.sh`. Sayt `dist/` dan o'qiladi va u har yangilashda qayta yig'iladi; brauzer eski sahifani ko'rsatsa — qattiq yangilang (`Ctrl+Shift+R`) |
 | `can't cd to /opt/daftar-bot` | `chown -R daftar:daftar /opt/daftar-bot` |

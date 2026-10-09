@@ -284,14 +284,20 @@ Qisqacha:
 sudo bash deploy/deploy.sh                       # loyiha shu papkada
 sudo bash deploy/deploy.sh https://github.com/siz/daftar-bot.git   # git'dan
 sudo bash deploy/deploy.sh --token-file=/root/token.txt            # tokenni fayldan o'qib o'rnatish
-cd ~/daftar-bot && git pull && sudo bash deploy/deploy.sh   # birinchi marta: taymerni o'rnatadi
+sudo bash /opt/daftar-bot/deploy/deploy.sh https://github.com/siz/daftar-bot.git   # serverda kod bor bo'lsa: yangilaydi va taymerni o'rnatadi
 ```
+
+> ⚠️ `/opt/daftar-bot` ichida **root sifatida `git pull` yozmang**: papka `daftar`
+> foydalanuvchisiga tegishli, git esa `fatal: detected dubious ownership in repository`
+> bilan to'xtaydi. `deploy.sh` (va taymer) pull'ni o'zi bajaradi hamda papkani root uchun
+> `safe.directory` ga qo'shib qo'yadi; qo'lda kerak bo'lsa
+> `sudo -u daftar git -C /opt/daftar-bot pull` ishlatasiz.
 
 Serverda **avtomatik yangilash** ishlaydi: `daftar-autodeploy.timer` har 2 daqiqada `origin` ni
 tekshiradi va yangi commit bo'lsa to'liq yangilashni o'zi bajaradi — `git pull` → `bun install` →
 saytni yig'ish (`dist/`) → `daftar-bot` xizmatini qayta ishga tushirish → `nginx` ni qayta o'qitish.
 Ya'ni repozitoriyga push qilingan o'zgarish ~2 daqiqa ichida serverda ko'rinadi va har safar
-qo'lda `git pull && sudo bash deploy/deploy.sh` yozish (yoki serverga kirish) shart emas. Yuqoridagi
+serverga kirib qo'lda yangilash yozish shart emas. Yuqoridagi
 qo'lda yangilash buyrug'i faqat **birinchi marta** — taymer hali o'rnatilmagan bo'lsa yoki u
 `--no-autodeploy` bilan o'chirilgan bo'lsa kerak bo'ladi; holatni `journalctl -u daftar-autodeploy -n 50`
 va `sudo bash /opt/daftar-bot/deploy/autodeploy.sh --check` ko'rsatadi.

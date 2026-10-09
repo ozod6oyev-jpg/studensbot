@@ -18,6 +18,11 @@
 #
 # Skript idempotent: qayta ishga tushirilsa ham xavfsiz (mavjud sozlamalar va
 # ma'lumotlar saqlanib qoladi, xizmat qayta ishga tushiriladi).
+#
+# Papka `daftar` foydalanuvchisiga tegishli: skriptning o'zi git buyruqlarini shu
+# foydalanuvchi nomidan bajaradi, qo'lda tekshirish uchun esa papkani root uchun
+# "xavfsiz" deb belgilaydi (`git safe.directory`) — aks holda root sifatida
+# `git -C /opt/daftar-bot ...` "dubious ownership" xatosi bilan to'xtaydi.
 set -euo pipefail
 
 REMOTE_URL="${REMOTE_URL:-}"
@@ -172,6 +177,22 @@ ok "'daftar' foydalanuvchisi Bun'ni ishga tushira oladi"
 # ------------------------------ loyiha fayllari ---------------------------
 
 info "Loyiha fayllari ${APP_DIR} ga joylashtirilmoqda"
+
+# Papka `daftar` foydalanuvchisiga tegishli, skript esa root ostida ishlaydi.
+# Skriptning o'zi git buyruqlarini `daftar` nomidan bajaradi (pastda), lekin
+# qo'lda tekshirish uchun root ham shu papkada git ishlata olishi kerak: aks
+# holda `git pull` "detected dubious ownership in repository" xatosi bilan
+# to'xtaydi (git boshqa foydalanuvchiga tegishli repozitoriyga ishonmaydi).
+if [ -d "${APP_DIR}/.git" ]; then
+  if git config --global --get-all safe.directory 2>/dev/null | grep -qxF "$APP_DIR"; then
+    ok "Git papkasi root uchun allaqachon xavfsiz deb belgilangan"
+  elif git config --global --add safe.directory "$APP_DIR" 2>/dev/null; then
+    ok "Git papkasi root uchun xavfsiz deb belgilandi: ${APP_DIR}"
+  else
+    warn "git safe.directory yozilmadi — qo'lda: git config --global --add safe.directory ${APP_DIR}"
+  fi
+fi
+
 if [ -n "$REMOTE_URL" ]; then
   # Git buyruqlari `daftar` foydalanuvchisi nomidan bajariladi: papka unga
   # tegishli, aks holda root sifatida ishlaganda git "dubious ownership"

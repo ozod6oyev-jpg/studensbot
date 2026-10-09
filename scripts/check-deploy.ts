@@ -28,13 +28,16 @@
  *      o'qitadi va avtomatik yangilash taymerini o'rnatib yoqadi;
  *   8. `autodeploy.sh` o'zgarish bo'lmasa hech narsa qilmaydi, yangi commit
  *      bo'lsa to'liq deploy'ni o'zi bajaradi (`.env` ham saqlanadi),
- *      `--check` esa faqat aytib qo'yadi, `git fetch` yiqilsa tinch turadi.
- *
+ *      `--check` esa faqat aytib qo'yadi, `git fetch` yiqilsa tinch turadi;
+ *   9. papka boshqa foydalanuvchiga tegishli bo'lsa ham root shu papkada git
+ *      ishlata oladi: `deploy.sh` papkani `safe.directory` ga bir marta
+ *      (takrorlamasdan) qo'shadi — aks holda git "detected dubious ownership"
+ *      xatosi bilan to'xtaydi (foydalanuvchi shu xatoga uchragan edi).
  * Skript root huquqini talab qiladi (deploy.sh ning o'zi ham): root bo'lmasa
  * tekshiruv bajarilmaydi va buni ochiq aytib, xato bilan tugaydi.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { chmodSync, chownSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -377,7 +380,46 @@ async function main(): Promise<void> {
   assert(!existsSync(`${APP}/tekshiruv-fayl.txt`), "--check hech narsa o'rnatmadi");
   assert(restartsNow() === restartsBeforeCheck, "--check botni qayta ishga tushirmadi");
 
-  console.log("\n=== 11-holat: autodeploy — fetch yiqilsa tinch turadi ===");
+  console.log("\n=== 11-holat: root boshqa foydalanuvchining papkasida git ishlatadi ===");
+  // Haqiqiy serverda shu xato chiqqan edi:
+  //   fatal: detected dubious ownership in repository at '/opt/daftar-bot'
+  // Papka `daftar` foydalanuvchisiga tegishli, root esa u yerda `git pull`
+  // yozgan. `deploy.sh` bunday papkani root uchun "xavfsiz" deb belgilashi kerak.
+  const gitHome = `${WORK}/home`;
+  const bareHome = `${WORK}/bosh-uy`;
+  await mkdir(bareHome, { recursive: true });
+  const globalConfig = `${gitHome}/.gitconfig`;
+  assert(
+    existsSync(globalConfig) && readFileSync(globalConfig, "utf8").includes(`directory = ${APP}`),
+    `deploy.sh papkani root uchun xavfsiz deb belgiladi (${APP.replace(WORK, "WORK")})`,
+  );
+  const entries = readFileSync(globalConfig, "utf8")
+    .split("\n")
+    .filter((line) => line.trim() === `directory = ${APP}`).length;
+  assert(entries === 1, `yozuv takrorlanmadi — bir marta qo'shilgan (${entries} ta)`);
+
+  // Papkani boshqa foydalanuvchiga o'tkazamiz (begona egalik holatini tiklaymiz).
+  chownSync(APP, 65534, 65534);
+  const gitIn = (home: string, extraEnv: Record<string, string> = {}) =>
+    spawnSync("git", ["-C", APP, "rev-parse", "--short", "HEAD"], {
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, ...extraEnv },
+    });
+  // Tizim sozlamasidagi `safe.directory = *` (konteynerlarda bo'ladi) tekshiruvni
+  // bekor qilmasligi uchun u o'chiriladi — serverdagi holat aynan shunday.
+  const withoutConfig = gitIn(bareHome, { GIT_CONFIG_NOSYSTEM: "1" });
+  assert(
+    withoutConfig.status !== 0 && (withoutConfig.stderr ?? "").includes("dubious ownership"),
+    "begona egalik aniqlandi (sozlamasiz git to'xtaydi — foydalanuvchi xatosi)",
+  );
+  const withConfig = gitIn(gitHome, { GIT_CONFIG_NOSYSTEM: "1" });
+  assert(
+    withConfig.status === 0 && (withConfig.stdout ?? "").trim().length > 0,
+    "deploy.sh yozgan sozlama bilan root papkada git ishlatadi",
+  );
+  chownSync(APP, 0, 0);
+
+  console.log("\n=== 12-holat: autodeploy — fetch yiqilsa tinch turadi ===");
   const goodOrigin = spawnSync("git", ["-C", APP, "remote", "get-url", "origin"], {
     encoding: "utf8",
   }).stdout.trim();
@@ -399,7 +441,7 @@ async function main(): Promise<void> {
   console.log(
     "\nDeploy tekshiruvi o'tdi: clone → .env saqlanishi → pull → yangilanish → " +
       "xavfsiz qayta ishga tushish → serverdagi o'zgarishlarni zaxiralash → " +
-      "avtomatik yangilash (build, nginx, taymer).",
+      "root uchun git ruxsati → avtomatik yangilash (build, nginx, taymer).",
   );
 }
 
