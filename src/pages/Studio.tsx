@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   AlertTriangle,
   BookOpen,
@@ -139,7 +138,7 @@ export default function Studio() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <SiteHeader />
+      <SiteHeader showBotSetup={false} />
 
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-10">
         {miniApp.active && (
@@ -173,94 +172,72 @@ export default function Studio() {
             Matnni yozing — daftarga qo'lda ko'chirilgan rasm chiqadi
           </h1>
           <p className="mt-3 text-[15px] leading-relaxed text-pencil/80">
-            Adabiyot uchun yo'l-yo'l daftar, matematika uchun katak daftar. Bot ham xuddi shu
-            dvigateldan foydalanadi — shu yerda xohlagan variantingizni topib, keyin Telegramda
-            ishlatasiz.
+            Adabiyot uchun yo'l-yo'l daftar, matematika uchun katak daftar: matnni yozing, uslubni
+            tanlang — varaqalar shu yerda tayyorlanadi.
           </p>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,440px)_minmax(0,1fr)]">
           <div className="space-y-6">
-            {/* Telegram Mini App: natijani to'g'ridan-to'g'ri chatga qaytarish */}
-            <Card
-              className={cn(
-                miniApp.active && "border-marker/45 bg-marker-soft/25",
-                !miniApp.active && "bg-white/70",
-              )}
-            >
-              <CardHeader>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <CardTitle className="hand text-2xl">Chatga yuborish</CardTitle>
-                    <CardDescription>
-                      {miniApp.active
-                        ? "Matn va tanlangan sozlamalar botga yuboriladi — varaqalar shu chatga qaytadi."
-                        : "Studio Telegram ichida (Mini App) ochilsa, natijani chatga yuborish mumkin."}
-                    </CardDescription>
+            {/* Telegram Mini App: natijani to'g'ridan-to'g'ri chatga qaytarish.
+                Brauzerda bu karta umuman chiqmaydi: Mini App'ni ulash haqidagi
+                ma'lumot Studio sahifasida ko'rsatilmaydi (batafsil — /bot sahifasida). */}
+            {miniApp.active && (
+              <Card className="border-marker/45 bg-marker-soft/25">
+                <CardHeader>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <CardTitle className="hand text-2xl">Chatga yuborish</CardTitle>
+                      <CardDescription>
+                        Matn va tanlangan sozlamalar botga yuboriladi — varaqalar shu chatga
+                        qaytadi.
+                      </CardDescription>
+                    </div>
+                    <Badge tone="marker">Mini App</Badge>
                   </div>
-                  <Badge tone={miniApp.active ? "marker" : "ink"}>
-                    {miniApp.active ? "Mini App" : "Brauzer"}
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {miniApp.active ? (
-                  <>
-                    <Button
-                      variant="marker"
-                      className="w-full"
-                      onClick={sendToChat}
-                      disabled={sending || text.trim().length === 0}
-                    >
-                      {sending ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Send className="h-4 w-4" />
-                      )}
-                      {sending ? "Yuborilmoqda…" : "Chatga yuborish"}
-                    </Button>
-                    {miniApp.send.message && (
-                      <p
-                        className={cn(
-                          "flex gap-2 rounded-xl border p-3 text-sm",
-                          miniApp.send.status === "sent"
-                            ? "border-sage/40 bg-sage-soft/50 text-ink"
-                            : "border-margin/40 bg-margin-soft/40 text-margin",
-                        )}
-                      >
-                        {miniApp.send.status === "sent" ? (
-                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                        ) : (
-                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                        )}
-                        <span>{miniApp.send.message}</span>
-                      </p>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Button
+                    variant="marker"
+                    className="w-full"
+                    onClick={sendToChat}
+                    disabled={sending || text.trim().length === 0}
+                  >
+                    {sending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
                     )}
-                    <p className="text-xs leading-relaxed text-pencil/65">
-                      Sozlamalar botda ham saqlanadi: keyingi varaqalar shu uslubda chiziladi.
-                      {activeNotebookId
-                        ? startLine
-                          ? ` Matn tanlangan daftarga ${startLine}-qatordan boshlab yoziladi.`
-                          : " Matn pastda tanlangan daftarga yoziladi."
-                        : " Chatda ochiq daftar bo'lsa, matn o'sha daftarga yoziladi."}
+                    {sending ? "Yuborilmoqda…" : "Chatga yuborish"}
+                  </Button>
+                  {miniApp.send.message && (
+                    <p
+                      className={cn(
+                        "flex gap-2 rounded-xl border p-3 text-sm",
+                        miniApp.send.status === "sent"
+                          ? "border-sage/40 bg-sage-soft/50 text-ink"
+                          : "border-margin/40 bg-margin-soft/40 text-margin",
+                      )}
+                    >
+                      {miniApp.send.status === "sent" ? (
+                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      )}
+                      <span>{miniApp.send.message}</span>
                     </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm leading-relaxed text-pencil/85">
-                      Telegramda botni ochib, menyudagi{" "}
-                      <span className="font-semibold text-ink">🖥 Studio (Mini App)</span> tugmasini
-                      bosing (yoki{" "}
-                      <code className="rounded bg-ink/8 px-1.5 py-0.5 font-mono text-[13px]">
-                        /studio
-                      </code>{" "}
-                      buyrug'ini yuboring) — Studio to'g'ridan-to'g'ri Telegram oynasida ochiladi,
-                      matnni yozasiz va natijani shu chatga yuborasiz.
-                    </p>
-                  </>
-                )}
-              </CardContent>
-            </Card>
+                  )}
+                  <p className="text-xs leading-relaxed text-pencil/65">
+                    Sozlamalar botda ham saqlanadi: keyingi varaqalar shu uslubda chiziladi.
+                    {activeNotebookId
+                      ? startLine
+                        ? ` Matn tanlangan daftarga ${startLine}-qatordan boshlab yoziladi.`
+                        : " Matn pastda tanlangan daftarga yoziladi."
+                      : " Chatda ochiq daftar bo'lsa, matn o'sha daftarga yoziladi."}
+                  </p>
+                </CardContent>
+              </Card>
+            )}
 
             {/* Mini App: qaysi daftarga va qaysi qatordan yozishni tanlash */}
             {miniApp.active && (
@@ -563,32 +540,13 @@ export default function Studio() {
               </CardContent>
             </Card>
 
-            {/* Mini App ichida «Botni ulash» bo'limi ko'rsatilmaydi: bot allaqachon
-                ulangan, ulash qo'llanmasi esa texnik ish — u faqat sayt ko'rinishida
-                chiqadi. */}
-            {!miniApp.active && (
-              <Card className="bg-sage-soft/40">
-                <CardContent className="flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <p className="hand text-2xl text-ink">Shu sozlamalar botda ham ishlaydi</p>
-                    <p className="mt-1 text-sm text-pencil/75">
-                      Telegramga matn yuborsangiz, bot aynan shu ko'rinishdagi rasmni qaytaradi.
-                    </p>
-                  </div>
-                  <Link
-                    to="/bot"
-                    className="rounded-xl bg-ink px-5 py-3 text-sm font-semibold text-paper shadow-note transition-transform hover:-translate-y-0.5"
-                  >
-                    Botni ulash →
-                  </Link>
-                </CardContent>
-              </Card>
-            )}
+            {/* Mini App'ni ulashga oid hech qanday bo'lim bu sahifada ataylab yo'q:
+                qo'llanma /bot sahifasida. */}
           </div>
         </div>
       </main>
 
-      <SiteFooter />
+      <SiteFooter showBotSetup={false} />
     </div>
   );
 }
