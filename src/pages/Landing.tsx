@@ -133,9 +133,9 @@ const faqs = [
       "Botda /lined yoki /grid buyruqlari daftar turini, /blue yoki /black siyoh rangini, /caveat va /marck yozuv uslubini o'zgartiradi. Studioda esa hammasi tugmalar orqali boshqariladi.",
   },
   {
-    question: "Mini App (Telegram ichidagi Studio) qanday ishlaydi?",
+    question: "Telegram ichidagi Studio qanday ishlaydi?",
     answer:
-      "Bot menyusidagi «Studio» tugmasi Studio sahifasini Telegram ichida ochadi — matn va sozlamalar shu yerda tanlanadi, «Chatga yuborish» bosilganda esa bot o'sha chatdagi daftarga yozib, varaqni darhol qaytaradi. Mini App uchun sayt HTTPS domenda turishi va /mini-app/ yo'li botga ulangan bo'lishi kerak.",
+      "Bot menyusidagi «Studio» tugmasi Studio sahifasini Telegram ichida ochadi — matn va sozlamalar shu yerda tanlanadi, «Chatga yuborish» bosilganda esa bot o'sha chatdagi daftarga yozib, varaqni darhol qaytaradi. Studio Telegram ichida ochilishi uchun sayt HTTPS domenda turishi va /mini-app/ yo'li botga ulangan bo'lishi kerak.",
   },
 ];
 
@@ -330,7 +330,7 @@ export default function Landing() {
           <div>
             <Badge tone="marker">
               <Smartphone className="h-3.5 w-3.5" />
-              Telegram Mini App
+              Telegram ichidagi Studio
             </Badge>
             <h2 className="hand mt-4 text-4xl leading-tight text-ink sm:text-5xl">
               Studio endi Telegram ichida ham ochiladi
@@ -367,7 +367,8 @@ export default function Landing() {
               </Link>
             </div>
             <p className="mt-3 text-xs leading-relaxed text-pencil/60">
-              Mini App uchun sayt HTTPS domenda turishi va <code className="font-mono">/mini-app/</code>{" "}
+              Studio Telegram ichida ochilishi uchun sayt HTTPS domenda turishi va{" "}
+              <code className="font-mono">/mini-app/</code>{" "}
               yo'li botga ulanishi kerak — sozlash qadamlari{" "}
               <Link to="/bot" className="font-semibold text-ink underline decoration-marker/60 decoration-2 underline-offset-2">
                 qo'llanmada

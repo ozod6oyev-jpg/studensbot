@@ -325,8 +325,8 @@ const L = {
   styleCancel: "❌ Bekor qilish",
   styleStop: "⏹ Uslubni to'xtatish",
   styleDelete: "🗑 Uslubni o'chirish",
-  // Telegram Mini App (Studio) tugmasi.
-  studio: "🖥 Studio (Mini App)",
+  // Telegram ichidagi Studio tugmasi.
+  studio: "🖥 Studio",
   // Tezkor buyruqlar ro'yxati o'rniga: pastdagi menyudagi tugmalar.
   help: "ℹ️ Yordam",
   chatId: "🆔 Chat ID",
@@ -1189,27 +1189,15 @@ function defaultBookTitle(list: Notebook[]): string {
 
 function welcomeText(): string {
   return [
-    "👋 Assalomu alaykum! Men Student Daftari — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
+    "👋 Assalomu alaykum! Men Student Daftari — matningizni haqiqiy daftar varaqasidek qo'lda yozaman.",
     "",
-    `📚 Avval ${L.newBook} bilan daftar yaratasiz (12, 36, 48 yoki 96 varaq va nom),`,
-    `✍️ keyin ${L.text} orqali daftarni tanlab matn yuborasiz.`,
-    "",
-    `${L.books} bo'limida har bir daftar kartasi bor: ${L.cardWrite}, ${L.cardDownload},`,
-    `${L.cardRename}.`,
-    `${L.settings} ichida: siyoh rangi (10 xil), qog'oz turi (3 xil), yozuv uslubi`,
-    `(${FONT_LIBRARY.length} qo'lyozma shrift) va yozuv sozlamalari bor.`,
-    "",
-    `🖋 ${L.styleCopy} — 10 ta so'z va 10 ta raqamni yozib suratga olasiz, bot`,
-    "o'lchab, sizning qo'lyozmangizga mos shaxsiy uslub yasaydi.",
-    "",
-    `${L.help} tugmasida qisqa qo'llanma bor — buyruqlarni yodlash shart emas.`,
-    ...(miniAppUrl()
-      ? [
-          "",
-          `🖥 ${L.studio} — Studio'ni Telegram ichida ochib, matnni yozasiz;`,
-          "natija «Chatga yuborish» tugmasi bilan shu chatga qaytadi.",
-        ]
-      : []),
+    `${L.newBook} — daftar yaratish (12/36/48/96 varaq va nom).`,
+    `${L.text} — daftarni tanlab matn yuborish.`,
+    `${L.books} — yozish, PDF yuklab olish, nomini o'zgartirish.`,
+    `${L.settings} — siyoh, qog'oz, ${FONT_LIBRARY.length} shrift va yozuv sozlamalari.`,
+    `${L.styleCopy} — qo'lyozmangizga mos shaxsiy uslub.`,
+    `${L.help} — qisqa qo'llanma.`,
+    ...(miniAppUrl() ? [`${L.studio} — matnni Telegram ichida yozib, chatga yuborish.`] : []),
   ].join("\n");
 }
 
@@ -1227,13 +1215,13 @@ function welcomeText(): string {
 export function studioText(url: string | undefined = miniAppUrl()): string {
   if (!url) {
     return [
-      "🖥 Studio (Mini App) hozircha mavjud emas.",
+      "🖥 Studio hozircha mavjud emas.",
       "",
       `Matn yozish uchun ${L.text} tugmasidan foydalanasiz.`,
     ].join("\n");
   }
   return [
-    "🖥 Studio (Mini App) — Telegram ichida ochiladigan daftar muharriri.",
+    "🖥 Studio — Telegram ichida ochiladigan daftar muharriri.",
     "",
     "Matnni yozasiz, varaqni darhol ko'rasiz va «Chatga yuborish» tugmasi bilan",
     "natija shu chatga varaqa bo'lib keladi.",
@@ -1281,7 +1269,7 @@ function paperText(chatId: number): string {
     "",
     ...PAPER_OPTIONS.map((option) => `${mark(style.paper === option.id, PAPER_SHORT[option.id])} — ${option.hint}`),
     "",
-    "Bu tanlov daftarsiz varaqalar uchun (masalan, Mini App'dan yuborilganda).",
+    "Bu tanlov daftarsiz varaqalar uchun (masalan, Studio'dan yuborilganda).",
     "Daftar ichida uning o'z qog'ozi ishlatiladi — u daftar yaratishda tanlanadi.",
   ].join("\n");
 }

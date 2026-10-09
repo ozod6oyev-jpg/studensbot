@@ -446,7 +446,7 @@ export async function sendToChat(payload: MiniAppSendPayload): Promise<MiniAppSe
     if (response.status === 401 || response.status === 403) {
       return {
         ok: false,
-        message: "Telegram ma'lumotlari eskirgan. Mini App'ni yopib, botdan qaytadan oching.",
+        message: "Telegram ma'lumotlari eskirgan. Studio'ni yopib, botdan qaytadan oching.",
       };
     }
     return { ok: false, message: detail ?? `Yuborilmadi (HTTP ${response.status}).` };
@@ -510,7 +510,7 @@ export async function fetchNotebookState(notebookId?: string | null): Promise<Mi
     if (response.status === 401 || response.status === 403) {
       return {
         ok: false,
-        message: "Telegram ma'lumotlari eskirgan. Mini App'ni yopib, botdan qaytadan oching.",
+        message: "Telegram ma'lumotlari eskirgan. Studio'ni yopib, botdan qaytadan oching.",
       };
     }
     return { ok: false, message: detail ?? `Daftarlar ro'yxati olinmadi (HTTP ${response.status}).` };
@@ -582,7 +582,7 @@ export async function manageNotebook(
   if (response.status === 401 || response.status === 403) {
     return {
       ok: false,
-      message: "Telegram ma'lumotlari eskirgan. Mini App'ni yopib, botdan qaytadan oching.",
+      message: "Telegram ma'lumotlari eskirgan. Studio'ni yopib, botdan qaytadan oching.",
     };
   }
   if (!response.ok || body?.ok !== true) {

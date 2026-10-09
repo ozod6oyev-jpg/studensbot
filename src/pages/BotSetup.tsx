@@ -234,7 +234,7 @@ export default function BotSetup() {
         {active && (
           <Card className="mb-8 border-sage/25 bg-sage-soft/40">
             <CardHeader className="mb-2">
-              <CardTitle className="text-base">Siz Telegram Mini App ichidasiz</CardTitle>
+              <CardTitle className="text-base">Siz Telegram ichidasiz</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm leading-relaxed text-pencil/85">
               <p>
