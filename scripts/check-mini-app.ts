@@ -13,22 +13,42 @@
  *       chatga haqiqiy PNG varaqa yuboradi (mock Telegram API `sendPhoto` ni
  *       oladi) va Studio sozlamalari (qog'oz turi) botda qo'llanadi;
  *     · o'zgartirilgan, eskirgan yoki bo'sh `initData` 401 oladi va chatga
- *       hech narsa yuborilmaydi.
+ *       hech narsa yuborilmaydi;
+ *  3. `POST /mini-app/state` — daftarlar ro'yxati va joriy bet holati:
+ *     · daftar tanlanmaguncha `activeId`/`side` bo'sh qoladi (Studio ro'yxatni
+ *       ko'rsatadi);
+ *     · `notebookId` berilganda o'sha daftar ochiq qilinadi va joriy bet
+ *       (bet indeksi, band/bo'sh qatorlar, davom etish qatori) qaytadi;
+ *     · begona yoki noma'lum daftar id'si qabul qilinmaydi;
+ *     · `/mini-app/send` `notebookId` va `startLine` bilan aynan shu betning shu
+ *       qatoridan yozadi (javobda qator ko'rsatiladi, qator chegaraga
+ *       qisqartiriladi) va chatga yangi varaqa keladi;
+ *  4. `POST /mini-app/notebook` — Mini App'dan daftar boshqaruvi:
+ *     · `create` yangi daftar yaratadi (varaq soni va qog'oz turi bilan), uni
+ *       darhol ochiq qiladi va ro'yxatda ko'rsatadi; noto'g'ri varaq soni rad
+ *       etiladi; nom berilmasa — standart nom;
+ *     · `rename` nomni almashtiradi, `remove` daftarni (ochiq bo'lsa —
+ *       sozlamalardan ham) olib tashlaydi, `undo` oxirgi yozuvni qaytaradi;
+ *     · `book` yozilgan betlarni PDF qilib chatga yuboradi;
+ *     · faqat shu chatning daftari ustida ishlaydi: begona id, noma'lum amal,
+ *       `initData`siz yoki GET so'rov rad etiladi.
  *
  * Telegram'ning o'zi kerak emas: mock API `getUpdates`, `setChatMenuButton`,
- * `sendMessage` va `sendPhoto` ni bajaradi.
+ * `sendMessage`, `sendPhoto` va `sendDocument` ni bajaradi.
  */
 import { createHmac } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   HEALTH_PATH,
   MAX_INIT_DATA_AGE_SECONDS,
+  MINI_APP_NOTEBOOK_PATH,
   MINI_APP_PATH,
+  MINI_APP_STATE_PATH,
   originFromUrl,
   parseInitData,
   verifyInitData,
@@ -41,6 +61,11 @@ const MINI_APP_URL = "https://mini.test/studio";
 /** Mini App ochilgan manba (CORS uchun). */
 const ORIGIN = "https://mini.test";
 const CHAT_ID = 4242;
+/** Sinov daftari: `notebooks.json` fayli bot ishga tushishidan OLDIN yoziladi. */
+const NOTEBOOK_ID = "nbsinov1";
+const NOTEBOOK_TITLE = "Sinov daftari";
+/** Betdagi tayyor matn — qatordan yozishni tekshirish uchun. */
+const SIDE_TEXT = "Birinchi qator allaqachon yozilgan.";
 /** Telegram WebApp `initData` ichidagi foydalanuvchi. */
 const USER = { id: CHAT_ID, first_name: "Aziz", username: "aziz" };
 
@@ -243,6 +268,11 @@ function isPng(bytes: Buffer): boolean {
   return signature.every((byte, index) => bytes[index] === byte);
 }
 
+/** PDF fayli «%PDF» bilan boshlanadi. */
+function isPdf(bytes: Buffer): boolean {
+  return bytes.subarray(0, 4).toString("latin1") === "%PDF";
+}
+
 async function waitFor(condition: () => boolean, timeoutMs: number, label: string): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -256,13 +286,28 @@ interface SendResponse {
   status: number;
   /** Javob sarlavhalari (`Headers` bilan bir xil ko'rinish; DOM tiplariga bog'lanmaydi). */
   headers: { get(name: string): string | null };
-  body: { ok?: boolean; mode?: string; pages?: number; message?: string; error?: string };
+  body: {
+    ok?: boolean;
+    mode?: string;
+    pages?: number;
+    message?: string;
+    error?: string;
+    /** Yozilgan bet (0 dan) va qator (1 dan) — `startLine` bilan yuborilganda. */
+    side?: number | null;
+    line?: number | null;
+  };
 }
 
 /** `POST /mini-app/send` ga so'rov yuboradi (Mini App qilgandek). */
 async function postSend(
   port: number,
-  payload: { initData?: string; text?: string; style?: Record<string, unknown> },
+  payload: {
+    initData?: string;
+    text?: string;
+    style?: Record<string, unknown>;
+    notebookId?: string;
+    startLine?: number;
+  },
   origin: string | null = ORIGIN,
 ): Promise<SendResponse> {
   const response = await fetch(`http://127.0.0.1:${port}${MINI_APP_PATH}`, {
@@ -277,6 +322,106 @@ async function postSend(
   let body: SendResponse["body"] = {};
   try {
     body = JSON.parse(text) as SendResponse["body"];
+  } catch {
+    body = { error: text.slice(0, 120) };
+  }
+  return { status: response.status, headers: response.headers, body };
+}
+
+interface StateSide {
+  sideIndex: number;
+  sideCount: number;
+  text: string;
+  linesPerPage: number;
+  usedLines: number;
+  nextLine: number;
+  freeLines: number;
+}
+
+interface StateNotebook {
+  id: string;
+  title: string;
+  sheets: number;
+  paper: string;
+  usedSides: number;
+  capacity: number;
+  active: boolean;
+}
+
+interface StateResponse {
+  status: number;
+  headers: { get(name: string): string | null };
+  body: {
+    ok?: boolean;
+    error?: string;
+    notebooks?: StateNotebook[];
+    activeId?: string | null;
+    side?: StateSide | null;
+    style?: unknown;
+  };
+}
+
+/** `POST /mini-app/state` ga so'rov yuboradi (Studio holatni shunday so'raydi). */
+async function postState(
+  port: number,
+  payload: { initData?: string; notebookId?: string },
+  origin: string | null = ORIGIN,
+): Promise<StateResponse> {
+  const response = await fetch(`http://127.0.0.1:${port}${MINI_APP_STATE_PATH}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(origin ? { origin } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  let body: StateResponse["body"] = {};
+  try {
+    body = JSON.parse(text) as StateResponse["body"];
+  } catch {
+    body = { error: text.slice(0, 120) };
+  }
+  return { status: response.status, headers: response.headers, body };
+}
+
+interface NotebookResponse {
+  status: number;
+  headers: { get(name: string): string | null };
+  body: {
+    ok?: boolean;
+    message?: string;
+    error?: string;
+    notebookId?: string | null;
+    title?: string | null;
+  };
+}
+
+/** `POST /mini-app/notebook` ga so'rov yuboradi (Studio amalni shunday chaqiradi). */
+async function postNotebook(
+  port: number,
+  payload: {
+    initData?: string;
+    action?: string;
+    notebookId?: string;
+    title?: string;
+    sheets?: number;
+    paper?: string;
+  },
+  origin: string | null = ORIGIN,
+): Promise<NotebookResponse> {
+  const response = await fetch(`http://127.0.0.1:${port}${MINI_APP_NOTEBOOK_PATH}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(origin ? { origin } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  let body: NotebookResponse["body"] = {};
+  try {
+    body = JSON.parse(text) as NotebookResponse["body"];
   } catch {
     body = { error: text.slice(0, 120) };
   }
@@ -355,6 +500,42 @@ async function main(): Promise<void> {
   const mock = await startMockTelegram();
   const apiPort = await freePort();
   const dataDir = await mkdtemp(join(tmpdir(), "daftar-mini-app-"));
+
+  // Daftar bazasini bot ishga tushishidan OLDIN tayyorlaymiz: shunda «daftar
+  // tanlash va qatordan yozish» chat orqali daftar yaratmasdan tekshiriladi.
+  // Ikkinchi daftar boshqa chatga tegishli — u hech qachon ko'rinmasligi kerak.
+  await writeFile(
+    join(dataDir, "notebooks.json"),
+    JSON.stringify(
+      {
+        version: 1,
+        notebooks: [
+          {
+            id: NOTEBOOK_ID,
+            chatId: CHAT_ID,
+            sheets: 12,
+            paper: "lined",
+            title: NOTEBOOK_TITLE,
+            createdAt: Date.now() - 1000,
+            sides: [{ text: SIDE_TEXT, createdAt: Date.now() - 1000 }],
+          },
+          {
+            id: "nbbegona1",
+            chatId: CHAT_ID + 1,
+            sheets: 12,
+            paper: "grid",
+            title: "Begona daftar",
+            createdAt: Date.now(),
+            sides: [{ text: "Begona matn", createdAt: Date.now() }],
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+
   console.log(`Mock Telegram: http://127.0.0.1:${mock.port}  (bot: http://127.0.0.1:${apiPort})`);
 
   const child: ChildProcess = spawn("bun", [BOT_ENTRY], {
@@ -438,6 +619,101 @@ async function main(): Promise<void> {
       `Studio sozlamasi botda qo'llandi ("${latest.caption.split("\n")[0]}")`,
     );
 
+    // --- Daftarlar holati va qatordan boshlab yozish ----------------------
+    const stateBefore = await postState(apiPort, { initData });
+    assert(
+      stateBefore.status === 200 && stateBefore.body.ok === true,
+      `POST ${MINI_APP_STATE_PATH} → 200 ok:true (${stateBefore.status})`,
+    );
+    assert(
+      stateBefore.body.notebooks?.length === 1 &&
+        stateBefore.body.notebooks[0].title === NOTEBOOK_TITLE &&
+        stateBefore.body.notebooks[0].capacity === 24,
+      `holatda faqat shu chatning daftari ko'rindi ("${stateBefore.body.notebooks?.[0]?.title}", ${stateBefore.body.notebooks?.[0]?.capacity} bet)`,
+    );
+    assert(
+      stateBefore.body.activeId === null && stateBefore.body.side === null,
+      "daftar tanlanmaguncha activeId va side bo'sh qoladi",
+    );
+
+    const stateSelected = await postState(apiPort, { initData, notebookId: NOTEBOOK_ID });
+    const side = stateSelected.body.side;
+    assert(
+      stateSelected.body.activeId === NOTEBOOK_ID &&
+        stateSelected.body.notebooks?.[0]?.active === true,
+      `notebookId bilan daftar ochiq qilindi (${stateSelected.body.activeId})`,
+    );
+    assert(
+      side !== null && side !== undefined && side.sideIndex === 0 && side.text === SIDE_TEXT,
+      `joriy bet va uning matni qaytdi (${side?.sideIndex}-bet)`,
+    );
+    assert(
+      (side?.usedLines ?? 0) >= 1 && (side?.nextLine ?? 0) === (side?.usedLines ?? 0) + 1,
+      `qatorlar sanaldi: ${side?.usedLines} qator band, davom etish ${side?.nextLine}-qatordan`,
+    );
+    assert(
+      (side?.freeLines ?? 0) > 0 && (side?.linesPerPage ?? 0) > (side?.usedLines ?? 0),
+      `betdagi bo'sh joy ko'rsatildi (${side?.freeLines} qator bo'sh)`,
+    );
+
+    const foreignBook = await postState(apiPort, { initData, notebookId: "nbbegona1" });
+    assert(
+      foreignBook.status === 200 && foreignBook.body.activeId === NOTEBOOK_ID,
+      `begona chatning daftari tanlanmadi (activeId=${foreignBook.body.activeId})`,
+    );
+
+    // Tanlangan qatordan yozish: matn aynan shu betning shu qatoridan boshlanadi.
+    const chosenLine = (side?.nextLine ?? 1) + 1;
+    const photosBeforeLine = mock.photos.length;
+    const atLine = await postSend(apiPort, {
+      initData,
+      text: "Tanlangan qatordan yozildi.",
+      notebookId: NOTEBOOK_ID,
+      startLine: chosenLine,
+    });
+    assert(
+      atLine.status === 200 && atLine.body.mode === "notebook",
+      `startLine bilan so'rov daftarga yozildi (${atLine.body.mode})`,
+    );
+    assert(
+      atLine.body.side === 0 && atLine.body.line === chosenLine,
+      `javobda bet va qator ko'rsatildi (${atLine.body.side}-bet, ${atLine.body.line}-qator)`,
+    );
+    assert(
+      (atLine.body.message ?? "").includes(`${chosenLine}-qatoridan`),
+      `xabar qatorni aytdi: "${atLine.body.message}"`,
+    );
+    await waitFor(() => mock.photos.length > photosBeforeLine, 40000, "yozilgan bet chatga keldi");
+    assert(
+      isPng(mock.photos[mock.photos.length - 1].bytes),
+      "yangilangan bet chatga haqiqiy PNG bo'lib keldi",
+    );
+
+    const stateAfter = await postState(apiPort, { initData });
+    assert(
+      (stateAfter.body.side?.usedLines ?? 0) > (side?.usedLines ?? 0),
+      `yangi yozuv holatda ko'rindi (${side?.usedLines} → ${stateAfter.body.side?.usedLines} qator)`,
+    );
+
+    // Qator raqami bet chegarasidan oshsa — eng oxirgi qatorga qisqartiriladi.
+    const clamped = await postSend(apiPort, {
+      initData,
+      text: "Chegaradan tashqari qator.",
+      notebookId: NOTEBOOK_ID,
+      startLine: 9999,
+    });
+    assert(
+      clamped.body.line === stateAfter.body.side?.linesPerPage &&
+        stateAfter.body.side?.linesPerPage === side?.linesPerPage,
+      `qator bet chegarasiga qisqartirildi (${clamped.body.line} = ${stateAfter.body.side?.linesPerPage})`,
+    );
+
+    // Holat so'rovi ham imzo talab qiladi.
+    const stateNoInit = await postState(apiPort, {});
+    assert(stateNoInit.status === 401, `initData'siz holat so'rovi 401 (${stateNoInit.status})`);
+    const stateGet = await fetch(`http://127.0.0.1:${apiPort}${MINI_APP_STATE_PATH}`);
+    assert(stateGet.status === 405, `GET ${MINI_APP_STATE_PATH} → 405 (${stateGet.status})`);
+
     // CORS preflight.
     const preflight = await fetch(`http://127.0.0.1:${apiPort}${MINI_APP_PATH}`, {
       method: "OPTIONS",
@@ -481,6 +757,188 @@ async function main(): Promise<void> {
 
     const unknown = await fetch(`http://127.0.0.1:${apiPort}/boshqa-yol`, { method: "POST" });
     assert(unknown.status === 404, `noma'lum yo'l 404 (${unknown.status})`);
+
+    // --- Mini App'dan daftar boshqaruvi -----------------------------
+    console.log("\n=== 3-qism: Mini App'dan daftar boshqaruvi (/mini-app/notebook) ===");
+
+    const created = await postNotebook(apiPort, {
+      initData,
+      action: "create",
+      sheets: 36,
+      paper: "grid",
+      title: "Mini App daftari",
+    });
+    assert(
+      created.status === 200 && created.body.ok === true,
+      `Mini App'da yangi daftar yaratildi (${created.status}, «${created.body.title}»)`,
+    );
+    const createdId = created.body.notebookId ?? "";
+    assert(createdId.length > 0, `javobda yangi daftar id'si qaytdi (${createdId})`);
+    assert(
+      (created.body.message ?? "").includes("Mini App daftari") &&
+        (created.body.message ?? "").includes("36 varaq"),
+      `xabar nom va varaq sonini aytdi: "${created.body.message}"`,
+    );
+
+    const afterCreate = await postState(apiPort, { initData });
+    const fresh = afterCreate.body.notebooks?.find((entry) => entry.id === createdId);
+    assert(
+      afterCreate.body.notebooks?.length === 2 && afterCreate.body.activeId === createdId,
+      `yangi daftar ro'yxatda va darhol ochiq bo'ldi (${afterCreate.body.notebooks?.length} ta, activeId=${afterCreate.body.activeId})`,
+    );
+    assert(
+      fresh?.sheets === 36 && fresh?.paper === "grid" && fresh?.capacity === 72,
+      `varaq soni va qog'oz turi saqlandi (${fresh?.sheets} varaq, ${fresh?.paper}, ${fresh?.capacity} bet)`,
+    );
+    assert(
+      afterCreate.body.side?.sideIndex === 0 && afterCreate.body.side?.text === "",
+      `bo'sh daftarda birinchi bet ko'rsatildi (${afterCreate.body.side?.sideIndex}-bet, ${afterCreate.body.side?.usedLines} qator band)`,
+    );
+
+    const wrongSheets = await postNotebook(apiPort, { initData, action: "create", sheets: 15 });
+    assert(
+      wrongSheets.status === 400 &&
+        wrongSheets.body.ok === false &&
+        (wrongSheets.body.message ?? "").includes("Varaq soni"),
+      `noto'g'ri varaq soni rad etildi (${wrongSheets.status}: "${wrongSheets.body.message}")`,
+    );
+    const afterReject = await postState(apiPort, { initData });
+    assert(
+      afterReject.body.notebooks?.length === 2,
+      `rad etilgan so'rovdan keyin daftar qo'shilmadi (${afterReject.body.notebooks?.length} ta)`,
+    );
+
+    const autoNamed = await postNotebook(apiPort, { initData, action: "create", sheets: 12 });
+    assert(
+      autoNamed.status === 200 && (autoNamed.body.title ?? "").trim().length > 0,
+      `nomsiz daftar o'zi nom oldi («${autoNamed.body.title}»)`,
+    );
+    const autoId = autoNamed.body.notebookId ?? "";
+
+    const renamed = await postNotebook(apiPort, {
+      initData,
+      action: "rename",
+      notebookId: createdId,
+      title: "Fizika daftari",
+    });
+    assert(
+      renamed.status === 200 && renamed.body.title === "Fizika daftari",
+      `daftar nomi almashtirildi («${renamed.body.title}»)`,
+    );
+    const afterRename = await postState(apiPort, { initData, notebookId: createdId });
+    assert(
+      afterRename.body.notebooks?.find((entry) => entry.id === createdId)?.title === "Fizika daftari",
+      "yangi nom holat so'rovida ham ko'rindi",
+    );
+
+    const foreignRename = await postNotebook(apiPort, {
+      initData,
+      action: "rename",
+      notebookId: "nbbegona1",
+      title: "Begona nom",
+    });
+    assert(
+      foreignRename.status === 400 &&
+        foreignRename.body.ok === false &&
+        (foreignRename.body.message ?? "").includes("topilmadi"),
+      `begona chatning daftari ustida amal bajarilmadi (${foreignRename.status}: "${foreignRename.body.message}")`,
+    );
+    const stillMine = await postState(apiPort, { initData, notebookId: createdId });
+    assert(
+      stillMine.body.notebooks?.find((entry) => entry.id === createdId)?.title === "Fizika daftari",
+      "begona so'rovdan keyin o'z daftarining nomi o'zgarmadi",
+    );
+
+    const WRITTEN = "Mini App'dan yozilgan qator.";
+    const wroteToCreated = await postSend(apiPort, {
+      initData,
+      text: WRITTEN,
+      notebookId: createdId,
+    });
+    assert(
+      wroteToCreated.status === 200 && wroteToCreated.body.mode === "notebook",
+      `matn Mini App'da yaratilgan daftarga yozildi (${wroteToCreated.body.mode})`,
+    );
+    const afterWrite = await postState(apiPort, { initData, notebookId: createdId });
+    assert(
+      (afterWrite.body.side?.text ?? "").includes(WRITTEN),
+      "yozilgan matn holat so'rovida ko'rindi",
+    );
+
+    const undone = await postNotebook(apiPort, { initData, action: "undo", notebookId: createdId });
+    assert(
+      undone.status === 200 &&
+        undone.body.ok === true &&
+        (undone.body.message ?? "").includes("orqaga qaytarildi"),
+      `oxirgi yozuv orqaga qaytarildi ("${undone.body.message}")`,
+    );
+    const afterUndo = await postState(apiPort, { initData, notebookId: createdId });
+    assert(
+      !(afterUndo.body.side?.text ?? "").includes(WRITTEN),
+      `daftar avvalgi holatiga qaytdi (${afterUndo.body.side?.usedLines} qator band)`,
+    );
+
+    const photosBeforeBook = mock.photos.length;
+    const book = await postNotebook(apiPort, { initData, action: "book", notebookId: NOTEBOOK_ID });
+    assert(book.status === 200 && book.body.ok === true, `yozilgan daftar kitob qilindi (${book.status})`);
+    await waitFor(() => mock.photos.length > photosBeforeBook, 60000, "kitob (PDF) chatga keldi");
+    const pdf = mock.photos[mock.photos.length - 1];
+    assert(
+      isPdf(pdf.bytes),
+      `chatga haqiqiy PDF kitob yuborildi (${Math.round(pdf.bytes.length / 1024)} KB)`,
+    );
+
+    const removed = await postNotebook(apiPort, { initData, action: "remove", notebookId: createdId });
+    assert(
+      removed.status === 200 &&
+        removed.body.ok === true &&
+        (removed.body.message ?? "").includes("o'chirildi"),
+      `Mini App'da yaratilgan daftar o'chirildi ("${removed.body.message}")`,
+    );
+    const afterRemove = await postState(apiPort, { initData });
+    assert(
+      afterRemove.body.notebooks?.length === 2 &&
+        !afterRemove.body.notebooks?.some((entry) => entry.id === createdId) &&
+        afterRemove.body.notebooks?.some((entry) => entry.id === autoId),
+      `faqat o'chirilgan daftar ro'yxatdan tushdi (${afterRemove.body.notebooks?.length} ta qoldi)`,
+    );
+    assert(
+      afterRemove.body.activeId === null,
+      "o'chirilgan daftar ochiq (activeId) ro'yxatidan ham olib tashlandi",
+    );
+
+    const removedIdle = await postNotebook(apiPort, { initData, action: "remove", notebookId: autoId });
+    const afterSecondRemove = await postState(apiPort, { initData });
+    assert(
+      removedIdle.status === 200 &&
+        afterSecondRemove.body.notebooks?.length === 1 &&
+        afterSecondRemove.body.notebooks?.[0]?.id === NOTEBOOK_ID,
+      `ochiq bo'lmagan daftar ham o'chirildi (${afterSecondRemove.body.notebooks?.length} ta qoldi)`,
+    );
+
+    const unknownAction = await postNotebook(apiPort, { initData, action: "boshqa" });
+    assert(
+      unknownAction.status === 400 &&
+        unknownAction.body.ok === false &&
+        Boolean(unknownAction.body.error),
+      `noma'lum amal rad etildi (${unknownAction.status}: "${unknownAction.body.error}")`,
+    );
+    const notebookGet = await fetch(`http://127.0.0.1:${apiPort}${MINI_APP_NOTEBOOK_PATH}`);
+    assert(
+      notebookGet.status === 405,
+      `GET ${MINI_APP_NOTEBOOK_PATH} → 405 (${notebookGet.status})`,
+    );
+    const notebookNoInit = await postNotebook(apiPort, { action: "create", sheets: 12 });
+    assert(notebookNoInit.status === 401, `initData'siz daftar amali 401 (${notebookNoInit.status})`);
+    const notebookPreflight = await fetch(`http://127.0.0.1:${apiPort}${MINI_APP_NOTEBOOK_PATH}`, {
+      method: "OPTIONS",
+      headers: { origin: ORIGIN },
+    });
+    assert(
+      notebookPreflight.status === 204 &&
+        notebookPreflight.headers.get("access-control-allow-origin") === ORIGIN,
+      "daftar amali uchun OPTIONS preflight 204 va CORS ruxsati bilan javob berdi",
+    );
   } finally {
     child.kill();
     mock.server.close();

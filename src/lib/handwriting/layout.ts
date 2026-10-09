@@ -416,3 +416,30 @@ export function linesPerPageFor(format: NotebookStyle["pageFormat"], lineGap: nu
   const usableHeight = Math.max(lineGap, height - ruleTop - bottomMargin);
   return Math.max(1, Math.floor(usableHeight / lineGap));
 }
+
+/**
+ * Varaqadagi qatorlarning band (row) koordinatalari — Studio'da «qaysi
+ * qatordan yozishni» daftar varaqasining o'zida tanlash uchun.
+ *
+ * Qiymatlar `layoutText` bilan bir xil geometriyadan hisoblanadi
+ * (`ruleTop`, `firstBaseline`, `lineGap`), shuning uchun belgilangan qator
+ * chizilgan chiziq ustiga tushadi. Ro'yxat uzunligi `linesPerPageFor()`
+ * bilan bir xil; har bir band `top` (yuqoridan masofa) va `height` dan iborat.
+ */
+export function lineRowsFor(
+  format: NotebookStyle["pageFormat"],
+  lineGap: number,
+): { top: number; height: number }[] {
+  const { width, height } = pageSizeFor(format);
+  const k = width / 1240;
+  const ruleTop = Math.round(92 * k);
+  const firstBaseline = ruleTop + lineGap - Math.round(3 * k);
+  const count = linesPerPageFor(format, lineGap);
+
+  const rows: { top: number; height: number }[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const top = Math.max(0, firstBaseline + index * lineGap - Math.round(lineGap * 0.85));
+    rows.push({ top, height: Math.min(lineGap, Math.max(0, height - top)) });
+  }
+  return rows;
+}

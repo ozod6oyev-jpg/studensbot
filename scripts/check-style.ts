@@ -11,7 +11,10 @@
  *      orasidan aynan o'sha shriftni topadi;
  *   5. shaxsiy uslub haqiqatan chizmani o'zgartiradi (siyoh ko'lami, qamrov);
  *   6. namunadan uslub qaytarib olinadi (recovery: 10° / 1.5 / 1.25 / 1.15);
- *   7. yaroqsiz namuna (bo'sh varaq) rad etiladi.
+ *   7. yaroqsiz namuna (bo'sh varaq) rad etiladi;
+ *   9. «Boshqacha yozsin» ko'rinadigan o'zgarish beradi: yangi urug' bilan
+ *      boshqa shrift tanlanadi va varaqadagi siyoh faqat urug' o'zgargandan
+ *      ancha ko'proq farq qiladi.
  */
 import { readFile } from "node:fs/promises";
 import {
@@ -23,6 +26,7 @@ import {
 import { renderNotebook } from "../src/lib/handwriting/render";
 import { analyzeSample, mergeProfiles, sampleQuality } from "../src/lib/handwriting/sample";
 import { FALLBACK_FONT_ID, fontEntry } from "../src/lib/handwriting/fonts.generated";
+import { shuffleHandwriting } from "../src/lib/handwriting/options";
 import { DEFAULT_STYLE, type FontId, type PersonalStyle } from "../src/lib/handwriting/types";
 
 const FONT_DIR = new URL("../src/assets/fonts/", import.meta.url);
@@ -243,6 +247,75 @@ async function main(): Promise<void> {
   );
   const summary = personalSummary({ ...neutral(), slant: 14, weight: 1.4, stretch: 1.2 });
   assert(summary.includes("qiyalik") && summary.includes("qalin"), `qisqa izoh o'qishga qulay: "${summary}"`);
+
+  console.log("\n=== 9-holat: «Boshqacha yozsin» ko'rinadigan o'zgarish beradi ===");
+  const variantText = "Salom, bu mening yozuvim. Vatan haqida 0123";
+  const variantBase = {
+    ...DEFAULT_STYLE,
+    font: baseFont,
+    pageFormat: "strip" as const,
+    fontSize: 40,
+  };
+  /** Varaqadagi siyoh qayerda ekanini ko'rsatuvchi niqob. */
+  const inkMaskOf = (page: { rgba: Uint8ClampedArray }): Uint8Array => {
+    const mask = new Uint8Array(page.rgba.length / 4);
+    for (let at = 0; at < page.rgba.length; at += 4) {
+      if ((page.rgba[at] + page.rgba[at + 1] + page.rgba[at + 2]) / 3 < 205) mask[at / 4] = 1;
+    }
+    return mask;
+  };
+  /** Ikki chizmaning siyohi qanchalik mos keladi (1 — butunlay bir xil). */
+  const maskOverlap = (a: Uint8Array, b: Uint8Array): number => {
+    let both = 0;
+    let either = 0;
+    for (let at = 0; at < a.length; at += 1) {
+      if (a[at] === 1 || b[at] === 1) either += 1;
+      if (a[at] === 1 && b[at] === 1) both += 1;
+    }
+    return either === 0 ? 1 : both / either;
+  };
+
+  const baseMask = inkMaskOf(
+    (await renderNotebook({ text: variantText, style: variantBase, fonts })).pages[0],
+  );
+  const seedOnly = await renderNotebook({
+    text: variantText,
+    style: { ...variantBase, seed: variantBase.seed + 424_242 },
+    fonts,
+  });
+  const seedOnlyOverlap = maskOverlap(baseMask, inkMaskOf(seedOnly.pages[0]));
+
+  // Fonni tanlash `seed` orqali aniqlanadi — ya'ni takrorlanadigan bo'lishi kerak.
+  const variantSeed = 424_242;
+  const variant = shuffleHandwriting(variantBase, variantSeed);
+  assert(
+    variant.font !== variantBase.font,
+    `boshqa yozuv uslubi tanlandi (${variantBase.font} → ${variant.font})`,
+  );
+  assert(variant.seed === variantSeed, `yangi urug' o'z holicha saqlanadi (${variant.seed})`);
+  assert(
+    shuffleHandwriting(variantBase, variantSeed).font === variant.font,
+    "bir xil urug' — bir xil tanlov (natija takrorlanadi)",
+  );
+
+  fonts[variant.font] = fonts[variant.font] ?? (await loadFont(variant.font));
+  const variantResult = await renderNotebook({
+    text: variantText,
+    style: { ...variantBase, ...variant },
+    fonts,
+  });
+  assert(
+    variantResult.warnings.length === 0,
+    `tanlangan shrift chizildi (${variant.font}, ogohlantirishsiz)`,
+  );
+  const variantOverlap = maskOverlap(baseMask, inkMaskOf(variantResult.pages[0]));
+  console.log(
+    `  siyoh mosligi: faqat urug' — ${seedOnlyOverlap.toFixed(2)}, boshqa uslub — ${variantOverlap.toFixed(2)}`,
+  );
+  assert(
+    variantOverlap < 0.75 && variantOverlap < seedOnlyOverlap - 0.1,
+    `«Boshqacha yozsin» ko'rinadigan o'zgarish beradi (moslik ${variantOverlap.toFixed(2)} < ${seedOnlyOverlap.toFixed(2)})`,
+  );
 
   if (failures > 0) {
     console.error(`\nUSLUB TEKSHIRUVI YIQILDI: ${failures} ta shart bajarilmadi.`);

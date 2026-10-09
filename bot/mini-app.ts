@@ -4,8 +4,10 @@
  * Studio sahifasi Telegram ichida (`web_app` tugmasi orqali) ochilganda
  * `window.Telegram.WebApp.initData` satrini oladi va shu yerga yuboradi:
  *
- *   POST /mini-app/send   { initData, text, style }
- *   GET  /healthz         → "ok"
+ *   POST /mini-app/send     { initData, text, style, notebookId?, startLine? }
+ *   POST /mini-app/state    { initData, notebookId? } → daftarlar + joriy bet
+ *   POST /mini-app/notebook { initData, action, notebookId?, title?, sheets?, paper? }
+ *   GET  /healthz           → "ok"
  *
  * `initData` — Telegram imzolagan ma'lumot: bot tokeni bilan HMAC-SHA256
  * tekshiriladi (`hash` maydonidan tashqari barcha juftliklar alifbo tartibida
@@ -20,6 +22,19 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export const MINI_APP_PATH = "/mini-app/send";
+/** Daftarlar ro'yxati va joriy bet holati (Studio yozishdan oldin tanlaydi). */
+export const MINI_APP_STATE_PATH = "/mini-app/state";
+/** Daftar bilan ishlash: yaratish, nomlash, o'chirish, orqaga qaytarish, PDF. */
+export const MINI_APP_NOTEBOOK_PATH = "/mini-app/notebook";
+/** Mini App'dan chaqiriladigan daftar amallari. */
+export type MiniAppNotebookAction = "create" | "rename" | "remove" | "undo" | "book";
+export const MINI_APP_NOTEBOOK_ACTIONS: MiniAppNotebookAction[] = [
+  "create",
+  "rename",
+  "remove",
+  "undo",
+  "book",
+];
 export const HEALTH_PATH = "/healthz";
 /** `initData` shu vaqtdan eski bo'lsa qabul qilinmaydi (o'g'irlangan ma'lumot uchun). */
 export const MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60;
@@ -48,6 +63,90 @@ export interface MiniAppRequest {
   text: string;
   /** Studio'dagi sozlamalar; tekshirish chaqiruvchi tomonda. */
   style?: unknown;
+  /** Studio tanlagan daftar (bo'lmasa — botdagi ochiq daftar). */
+  notebookId?: string;
+  /** Studio tanlagan qator: 1 dan boshlab (bo'lmasa — oxirgi yozuv tagidan). */
+  startLine?: number;
+}
+
+/** Holat so'rovi: `notebookId` berilsa, o'sha daftar ochiq qilib qo'yiladi. */
+export interface MiniAppStateRequest {
+  chatId: number;
+  user?: MiniAppUser;
+  notebookId?: string;
+}
+
+/** Bitta daftar haqida Studio ko'rsatadigan qisqa ma'lumot. */
+export interface MiniAppNotebookInfo {
+  id: string;
+  title: string;
+  sheets: number;
+  paper: string;
+  usedSides: number;
+  capacity: number;
+  active: boolean;
+}
+
+/** Tanlangan daftarning joriy beti: qaysi betga, qaysi qatordan yoziladi. */
+export interface MiniAppSideInfo {
+  /** 0 dan boshlanadigan bet indeksi (Studio'da `sideIndex + 1` ko'rinadi). */
+  sideIndex: number;
+  /** Nechta bet band qilingan. */
+  sideCount: number;
+  /** Shu betdagi matn (Studio uni chizib ko'rsatadi). */
+  text: string;
+  /** Bir betga sig'adigan qatorlar soni. */
+  linesPerPage: number;
+  /** Band qatorlar soni. */
+  usedLines: number;
+  /** Davom etish taklif qilinadigan qator (1 dan boshlab). */
+  nextLine: number;
+  /** Shu betdagi bo'sh qatorlar soni. */
+  freeLines: number;
+}
+
+/** `POST /mini-app/state` javobi. */
+export interface MiniAppState {
+  notebooks: MiniAppNotebookInfo[];
+  activeId: string | null;
+  side: MiniAppSideInfo | null;
+  /** Chat uslubi (daftar bo'lsa — o'sha daftarning qog'ozi bilan). */
+  style: unknown;
+}
+
+/**
+ * `POST /mini-app/notebook` so'rovi — chatdagi daftarni boshqarish.
+ *
+ * Chat bot chatidagi tugmalar bilan bir xil ishlarni qiladi: `create` — yangi
+ * daftar (varaq soni va qog'oz turi bilan), `rename` — nomni almashtirish,
+ * `remove` — o'chirish, `undo` — oxirgi tahrirni orqaga qaytarish, `book` —
+ * yozilgan betlarni PDF kitob qilib chatga yuborish. Yozish/o'chirish bilan
+ * bog'liq murakkab oqimlar (oraliqni o'chirish) botda qoladi.
+ */
+export interface MiniAppNotebookRequest {
+  chatId: number;
+  user?: MiniAppUser;
+  action: MiniAppNotebookAction;
+  /** Qaysi daftar ustida ish bajariladi (`create` uchun shart emas). */
+  notebookId?: string;
+  /** `create`/`rename` uchun nom (bo'sh bo'lsa — standart nom). */
+  title?: string;
+  /** `create` uchun varaq soni (12/36/48/96); tekshirish chaqiruvchi tomonda. */
+  sheets?: unknown;
+  /** `create` uchun qog'oz turi (`lined`/`grid`/`plain`); tekshirish chaqiruvchi tomonda. */
+  paper?: unknown;
+}
+
+/** `POST /mini-app/notebook` javobi (xato ham shu ko'rinishda qaytadi). */
+export interface MiniAppNotebookResult {
+  /** Amal bajarildimi (`false` bo'lsa `message` sababni aytadi). */
+  ok: boolean;
+  /** Foydalanuvchiga ko'rsatiladigan qisqa xabar. */
+  message: string;
+  /** Yaratilgan (yoki o'zgargan) daftar id'si — Studio shuni tanlab qo'yadi. */
+  notebookId?: string | null;
+  /** Daftar nomi (yaratish/nomlashdan keyin). */
+  title?: string | null;
 }
 
 export interface MiniAppResult {
@@ -57,6 +156,10 @@ export interface MiniAppResult {
   pages: number;
   /** Yozilgan daftar nomi (bo'lsa). */
   notebook?: string | null;
+  /** Yozilgan bet indeksi (0 dan boshlab) — Studio tanlagan qator uchun. */
+  side?: number;
+  /** Yozish boshlangan qator (1 dan boshlab). */
+  line?: number;
   /** Foydalanuvchiga ko'rsatiladigan qo'shimcha izoh. */
   note?: string;
 }
@@ -66,6 +169,16 @@ export interface MiniAppHandlerOptions {
   token: string;
   /** Matnni chizib, chatga yuboradigan funksiya. */
   send: (request: MiniAppRequest) => Promise<MiniAppResult>;
+  /**
+   * Daftarlar ro'yxati va joriy bet holati (`POST /mini-app/state`).
+   * Berilmasa, holat so'rovi 503 bilan javob oladi (faqat yuborish ishlaydi).
+   */
+  state?: (request: MiniAppStateRequest) => Promise<MiniAppState>;
+  /**
+   * Daftar bilan ishlash (`POST /mini-app/notebook`). Berilmasa, bu yo'l 503
+   * bilan javob oladi (Studio faqat yozishni taklif qiladi).
+   */
+  notebook?: (request: MiniAppNotebookRequest) => Promise<MiniAppNotebookResult>;
   /**
    * CORS uchun ruxsat etilgan manbalar (masalan, `MINI_APP_URL` domeni).
    * Bo'sh bo'lsa har qanday manba javobni o'qiy oladi — xavfsizlikni
@@ -218,6 +331,9 @@ export function createMiniAppHandler(
   const allowed = (options.allowedOrigins ?? []).filter((origin) => origin.length > 0);
 
   return async (request, response) => {
+    const path = (request.url ?? "").split("?")[0];
+    const isState = path === MINI_APP_STATE_PATH;
+    const isNotebook = path === MINI_APP_NOTEBOOK_PATH;
     const origin = originOf(request.headers.origin);
     const originAllowed = !origin || allowed.length === 0 || allowed.includes(origin);
     const cors: Record<string, string> = originAllowed && origin
@@ -235,7 +351,17 @@ export function createMiniAppHandler(
       return;
     }
 
-    let payload: { initData?: unknown; text?: unknown; style?: unknown };
+    let payload: {
+      initData?: unknown;
+      text?: unknown;
+      style?: unknown;
+      notebookId?: unknown;
+      startLine?: unknown;
+      action?: unknown;
+      title?: unknown;
+      sheets?: unknown;
+      paper?: unknown;
+    };
     try {
       const raw = await readBody(request);
       payload = JSON.parse(raw || "{}") as typeof payload;
@@ -260,6 +386,88 @@ export function createMiniAppHandler(
       return;
     }
 
+    const notebookId =
+      typeof payload.notebookId === "string" && payload.notebookId.trim().length > 0
+        ? payload.notebookId.trim()
+        : undefined;
+    const startLine =
+      typeof payload.startLine === "number" && Number.isFinite(payload.startLine) && payload.startLine >= 1
+        ? Math.floor(payload.startLine)
+        : undefined;
+
+    // Holat so'rovi: daftarlar ro'yxati va joriy bet (matn talab qilinmaydi).
+    if (isState) {
+      if (!options.state) {
+        sendJson(response, 503, { ok: false, error: "holat xizmati yoqilmagan" }, cors);
+        return;
+      }
+      try {
+        const state = await options.state({ chatId, user: check.user, notebookId });
+        sendJson(response, 200, { ok: true, ...state }, cors);
+      } catch (error) {
+        log(`Mini App: holat so'rovida xato — ${(error as Error).message}`);
+        sendJson(response, 500, { ok: false, error: "holat olinmadi" }, cors);
+      }
+      return;
+    }
+
+    // Daftar amali: yaratish, nomlash, o'chirish, orqaga qaytarish, PDF kitob.
+    if (isNotebook) {
+      if (!options.notebook) {
+        sendJson(response, 503, { ok: false, error: "daftar xizmati yoqilmagan" }, cors);
+        return;
+      }
+
+      const action = typeof payload.action === "string" ? payload.action.trim() : "";
+      if (!MINI_APP_NOTEBOOK_ACTIONS.includes(action as MiniAppNotebookAction)) {
+        sendJson(
+          response,
+          400,
+          { ok: false, error: "noma'lum amal", message: "Bu amal qo'llab-quvvatlanmaydi." },
+          cors,
+        );
+        return;
+      }
+
+      // Nomning o'zini bot tozalaydi (bo'sh nom, uzunlik, `uniqueTitle`).
+      const title = typeof payload.title === "string" ? payload.title.trim().slice(0, 80) : undefined;
+      try {
+        const result = await options.notebook({
+          chatId,
+          user: check.user,
+          action: action as MiniAppNotebookAction,
+          notebookId,
+          ...(title ? { title } : {}),
+          sheets: payload.sheets,
+          paper: payload.paper,
+        });
+        sendJson(
+          response,
+          result.ok ? 200 : 400,
+          {
+            ok: result.ok,
+            message: result.message,
+            notebookId: result.notebookId ?? null,
+            title: result.title ?? null,
+          },
+          cors,
+        );
+      } catch (error) {
+        log(`Mini App: daftar amalida xato — ${(error as Error).message}`);
+        sendJson(
+          response,
+          500,
+          {
+            ok: false,
+            error: "daftar amali bajarilmadi",
+            message: "Daftar amali bajarilmadi — keyinroq urinib ko'ring.",
+          },
+          cors,
+        );
+      }
+      return;
+    }
+
     const text = typeof payload.text === "string" ? payload.text.trim().slice(0, MAX_MINI_APP_CHARS) : "";
     if (text.length === 0) {
       sendJson(response, 400, { ok: false, error: "matn bo'sh" }, cors);
@@ -272,6 +480,8 @@ export function createMiniAppHandler(
         user: check.user,
         text,
         style: payload.style,
+        notebookId,
+        startLine,
       });
       sendJson(
         response,
@@ -283,10 +493,14 @@ export function createMiniAppHandler(
           notebook: result.notebook ?? null,
           message:
             result.mode === "notebook" && result.notebook
-              ? `✅ «${result.notebook}» daftariga yozildi — chatga yuborildi.`
+              ? result.line
+                ? `✅ «${result.notebook}» daftariga yozildi — ${(result.side ?? 0) + 1}-betning ${result.line}-qatoridan.`
+                : `✅ «${result.notebook}» daftariga yozildi — chatga yuborildi.`
               : result.pages > 1
                 ? `✅ ${result.pages} varaqa chatga yuborildi.`
                 : "✅ Varaqa chatga yuborildi.",
+          side: result.side ?? null,
+          line: result.line ?? null,
           note: result.note,
         },
         cors,

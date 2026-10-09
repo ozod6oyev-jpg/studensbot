@@ -46,11 +46,19 @@ import { readFile, mkdir, writeFile, rename } from "node:fs/promises";
 import { createServer } from "node:http";
 import {
   HEALTH_PATH,
+  MINI_APP_NOTEBOOK_PATH,
   MINI_APP_PATH,
+  MINI_APP_STATE_PATH,
   createMiniAppHandler,
   originFromUrl,
+  type MiniAppNotebookInfo,
+  type MiniAppNotebookRequest,
+  type MiniAppNotebookResult,
   type MiniAppRequest,
   type MiniAppResult,
+  type MiniAppSideInfo,
+  type MiniAppState,
+  type MiniAppStateRequest,
 } from "./mini-app";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,6 +83,8 @@ import { decodeSampleImage } from "../src/lib/handwriting/image";
 import { analyzeSample, mergeProfiles, sampleQuality, type SampleProfile } from "../src/lib/handwriting/sample";
 import {
   MAX_STYLES_PER_CHAT,
+  PAPER_CHOICES,
+  SHEET_CHOICES,
   cleanStyleName,
   cleanTitle,
   createStore,
@@ -444,36 +454,45 @@ const PDF_PROGRESS_STEP = 8;
 const WEBHOOK_PATH = "/telegram/webhook";
 const CYRILLIC_RE = /[\u0400-\u04FF]/;
 
-const HELP_TEXT = [
-  "📓 Daftar Bot — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
-  "",
-  "Hammasi tugmalarda — buyruq yodlash shart emas:",
-  `• ${L.text} — yozishni boshlash (daftar tanlanadi)`,
-  `• ${L.settings} ichida: 🖋 siyoh rangi (10 xil), 📄 qog'oz turi (yo'l-yo'l,`,
-  `  katak, oq qog'oz), ${L.font} (${FONT_LIBRARY.length} shrift, rasm ko'rinishida),`,
-  "  📐 yozuv sozlamalari (o'lcham, qator oralig'i, qo'l tebranishi, matematika,",
-  "  yuborish turi) va 📚 daftarlar (yozish, tahrirlash, PDF kitob, nomini o'zgartirish),",
-  `• ${L.styleCopy} — o'z qo'lyozmangizni nusxalash,`,
-  `• ${L.help} — shu qo'llanma, ${L.chatId} — chat raqamingiz,`,
-  `• 🖥 Studio (Mini App) sozlanganda — chat menyusidagi tugma bilan Studio'ni`,
-  "  Telegram ichida ochib, natijani chatga yuborasiz.",
-  "",
-  "O'z qo'l yozuvingiz: 🖋 Uslubimni nusxalash — 10 ta so'zni yo'l-yo'l daftarga,",
-  "10 ta raqamni katak daftarga yozib suratga olasiz; bot uslubni o'lchab, faqat",
-  "sizga ko'rinadigan shaxsiy uslub qilib saqlaydi.",
-  "",
-  "Daftarlar: ➕ Yangi daftar (12/36/48/96 varaq) — so'ng qog'oz turi (yo'l-yo'l,",
-  "katak yoki oq qog'oz) va nom tanlanadi; tanlangan qog'oz daftarda saqlanadi.",
-  "Yozgan matningiz varaq-tomonga ketma-ket tushadi: old tomonda chegara chapda,",
-  "orqa tomonda — o'ngda.",
-  "",
-  "Matematika yozuvi:",
-  "• daraja: x^2, x^{10}",
-  "• indeks: a_1, a_{n+1}",
-  "• kasr: \\frac{a}{b} yoki $a/b$",
-  "• ildiz: \\sqrt{x} yoki √x",
-  "• belgilar: × ÷ ± ≤ ≥ ≠ ∞ π ∑ ∫ √ ° ∠ ⊥ ∈ ∪ ∩",
-].join("\n");
+/**
+ * Qo'llanma matni. Funksiya — chunki Studio qatori faqat Mini App manzili
+ * (`MINI_APP_URL`) sozlangan o'rnatishlarda qo'shiladi: mavjud bo'lmagan tugma
+ * haqida gapirmaymiz. Mini App'ni ulash bo'yicha texnik ko'rsatmalar bu yerda
+ * yo'q — ular bot egasi uchun (`deploy/README.md`).
+ */
+function helpText(): string {
+  return [
+    "📓 Daftar Bot — matningizni haqiqiy daftar varaqasidek qo'lda yozib beraman.",
+    "",
+    "Hammasi tugmalarda — buyruq yodlash shart emas:",
+    `• ${L.text} — yozishni boshlash (daftar tanlanadi)`,
+    `• ${L.settings} ichida: 🖋 siyoh rangi (10 xil), 📄 qog'oz turi (yo'l-yo'l,`,
+    `  katak, oq qog'oz), ${L.font} (${FONT_LIBRARY.length} shrift, rasm ko'rinishida),`,
+    "  📐 yozuv sozlamalari (o'lcham, qator oralig'i, qo'l tebranishi, matematika,",
+    "  yuborish turi) va 📚 daftarlar (yozish, tahrirlash, PDF kitob, nomini o'zgartirish),",
+    `• ${L.styleCopy} — o'z qo'lyozmangizni nusxalash,`,
+    `• ${L.help} — shu qo'llanma, ${L.chatId} — chat raqamingiz,`,
+    ...(miniAppUrl()
+      ? [`• ${L.studio} — chat menyusidagi tugma bilan ochib, natijani chatga yuborasiz.`]
+      : []),
+    "",
+    "O'z qo'l yozuvingiz: 🖋 Uslubimni nusxalash — 10 ta so'zni yo'l-yo'l daftarga,",
+    "10 ta raqamni katak daftarga yozib suratga olasiz; bot uslubni o'lchab, faqat",
+    "sizga ko'rinadigan shaxsiy uslub qilib saqlaydi.",
+    "",
+    "Daftarlar: ➕ Yangi daftar (12/36/48/96 varaq) — so'ng qog'oz turi (yo'l-yo'l,",
+    "katak yoki oq qog'oz) va nom tanlanadi; tanlangan qog'oz daftarda saqlanadi.",
+    "Yozgan matningiz varaq-tomonga ketma-ket tushadi: old tomonda chegara chapda,",
+    "orqa tomonda — o'ngda.",
+    "",
+    "Matematika yozuvi:",
+    "• daraja: x^2, x^{10}",
+    "• indeks: a_1, a_{n+1}",
+    "• kasr: \\frac{a}{b} yoki $a/b$",
+    "• ildiz: \\sqrt{x} yoki √x",
+    "• belgilar: × ÷ ± ≤ ≥ ≠ ∞ π ∑ ∫ √ ° ∠ ⊥ ∈ ∪ ∩",
+  ].join("\n");
+}
 
 /* ------------------------------------------------------------------ */
 /* Sozlamalar ombori (JSON fayl)                                       */
@@ -1195,28 +1214,31 @@ function welcomeText(): string {
 }
 
 /**
- * `/studio` buyrug'i matni: Mini App havolasi bo'lsa uni ko'rsatadi, aks holda
- * administrator uchun nima qilish kerakligini aytadi.
+ * `/studio` buyrug'i matni: Mini App sozlangan bo'lsa tugma orqali ochishni
+ * aytadi, aks holda funksiya hozircha yo'qligini bildiradi.
+ *
+ * Mini App'ni **ulash** bo'yicha texnik ko'rsatmalar (env, nginx) bu yerda yo'q:
+ * ular foydalanuvchiga emas, bot egasiga tegishli (`deploy/README.md`).
+ *
+ * Manzil matn ichida TAKRORLANMAYDI: uni xabar ostidagi `web_app` tugmasi olib
+ * yuradi (matnda ham havola bo'lsa xabar uzun va chigal ko'rinadi). `url`
+ * parametri faqat tekshiruv uchun beriladi — standart qiymat `MINI_APP_URL`.
  */
-function studioText(): string {
-  const url = miniAppUrl();
+export function studioText(url: string | undefined = miniAppUrl()): string {
   if (!url) {
     return [
-      "🖥 Studio — matnni yozib, daftar varaqasini darhol ko'radigan sahifa.",
+      "🖥 Studio (Mini App) hozircha mavjud emas.",
       "",
-      "Uni Telegram ichida (Mini App sifatida) ochish uchun bot egasi",
-      ".env faylida MINI_APP_URL ni HTTPS manzilga o'rnatishi kerak:",
-      "MINI_APP_URL=https://domen.uz/studio",
-      "",
-      "Hozircha Studio'ni oddiy brauzerda ochib ishlatish mumkin.",
+      `Matn yozish uchun ${L.text} tugmasidan foydalanasiz.`,
     ].join("\n");
   }
   return [
     "🖥 Studio (Mini App) — Telegram ichida ochiladigan daftar muharriri.",
     "",
     "Matnni yozasiz, varaqni darhol ko'rasiz va «Chatga yuborish» tugmasi bilan",
-    "natija shu chatga varaqa bo'lib keladi. Pastdagi tugma yoki shu havola:",
-    url,
+    "natija shu chatga varaqa bo'lib keladi.",
+    "",
+    "Ochish uchun quyidagi tugmani bosing (yoki pastdagi menyudagi 🖥 Studio tugmasini).",
   ].join("\n");
 }
 
@@ -1567,11 +1589,96 @@ function sanitizeStudioStyle(raw: unknown): ChatSettings {
 }
 
 /**
+ * Daftarning joriy yozish joyi: qaysi betga va qaysi qatordan davom etadi.
+ *
+ * Botdagi «joy tanlash» bilan bir xil qoida: oxirgi betda bo'sh joy bo'lsa —
+ * o'sha bet, aks holda yangi betning 1-qatori. Studio shu ma'lumot asosida
+ * varaqani chizib, qatorni tanlash imkonini beradi.
+ */
+async function miniAppPosition(chatId: number, notebook: Notebook): Promise<MiniAppSideInfo> {
+  const store = await books();
+  const usedSides = store.usedSides(notebook);
+  const lastSide = usedSides - 1;
+  const lastMeasure =
+    lastSide >= 0 ? await measureSide(chatId, lastSide, notebook.sides[lastSide].text) : undefined;
+  const startNewSide = usedSides === 0 || !lastMeasure || lastMeasure.freeLines <= 0;
+  const sideIndex = startNewSide ? usedSides : lastSide;
+  const style = styleFor(chatId);
+  const linesPerPage = lastMeasure?.linesPerPage ?? linesPerPageFor(style.pageFormat, style.lineGap);
+
+  if (startNewSide) {
+    return {
+      sideIndex,
+      sideCount: usedSides,
+      text: "",
+      linesPerPage,
+      usedLines: 0,
+      nextLine: 1,
+      freeLines: linesPerPage,
+    };
+  }
+
+  const usedLines = lastMeasure?.lines.length ?? 0;
+  return {
+    sideIndex,
+    sideCount: usedSides,
+    text: notebook.sides[sideIndex]?.text ?? "",
+    linesPerPage,
+    usedLines,
+    nextLine: Math.min(linesPerPage, usedLines + 1),
+    freeLines: lastMeasure?.freeLines ?? 0,
+  };
+}
+
+/**
+ * `POST /mini-app/state`: Studio yozishdan oldin daftar tanlashi va joriy
+ * betni ko'rishi uchun ma'lumot. `notebookId` berilsa — o'sha daftar chatda
+ * ochiq qilib qo'yiladi (botdagi «ochiq daftar» sozlamasi bilan bir xil).
+ */
+async function miniAppState(request: MiniAppStateRequest): Promise<MiniAppState> {
+  const chatId = request.chatId;
+  const store = await books();
+
+  const wanted = request.notebookId ? store.get(request.notebookId) : undefined;
+  if (wanted && wanted.chatId === chatId) await updateSettings(chatId, { notebookId: wanted.id });
+
+  const list = store.list(chatId);
+  const active = rawSettings(chatId).notebookId;
+  const activeId = active && list.some((notebook) => notebook.id === active) ? active : null;
+  const notebook = activeId ? store.get(activeId) : undefined;
+
+  const notebooks: MiniAppNotebookInfo[] = list.map((entry) => ({
+    id: entry.id,
+    title: entry.title,
+    sheets: entry.sheets,
+    paper: entry.paper,
+    usedSides: store.usedSides(entry),
+    capacity: store.capacity(entry),
+    active: entry.id === activeId,
+  }));
+
+  if (!notebook) {
+    return { notebooks, activeId: null, side: null, style: styleFor(chatId) };
+  }
+
+  const side = await miniAppPosition(chatId, notebook);
+  const renderSide = Math.max(0, Math.min(side.sideIndex, store.usedSides(notebook) - 1));
+  return {
+    notebooks,
+    activeId,
+    side,
+    style: notebookStyle(chatId, notebook, renderSide),
+  };
+}
+
+/**
  * Studio (Mini App) yuborgan matnni chatga qaytaradi.
  *
  * Chatda ochiq daftar bo'lsa — botdagi kabi o'sha daftarga yozamiz (baza va
- * ↩️ orqaga qaytarish tarixi ham ishlaydi). Daftar bo'lmasa, varaqalar shu
- * chat uslubida chizilib, to'g'ridan-to'g'ri chatga yuboriladi.
+ * ↩️ orqaga qaytarish tarixi ham ishlaydi). Studio `notebookId` va `startLine`
+ * yuborsa, matn aynan o'sha daftarning o'sha qatoridan boshlab yoziladi.
+ * Daftar bo'lmasa, varaqalar shu chat uslubida chizilib, to'g'ridan-to'g'ri
+ * chatga yuboriladi.
  */
 async function sendMiniAppText(request: MiniAppRequest): Promise<MiniAppResult> {
   const chatId = request.chatId;
@@ -1579,14 +1686,40 @@ async function sendMiniAppText(request: MiniAppRequest): Promise<MiniAppResult> 
   if (Object.keys(style).length > 0) await updateSettings(chatId, style);
 
   const store = await books();
+  // Studio tanlagan daftar faqat shu chatniki bo'lsa qabul qilinadi.
+  const chosen = request.notebookId ? store.get(request.notebookId) : undefined;
+  if (chosen && chosen.chatId === chatId) await updateSettings(chatId, { notebookId: chosen.id });
+
   const activeId = rawSettings(chatId).notebookId;
   const notebook = activeId ? store.get(activeId) : undefined;
 
   if (notebook && notebook.chatId === chatId) {
+    // Studio qatorni tanlagan bo'lsa — `writeFlow` orqali aynan shu betning shu
+    // qatoridan boshlaymiz (`writeToNotebook` shu oqimni hurmat qiladi).
+    let startAt: { sideIndex: number; line: number } | undefined;
+    if (typeof request.startLine === "number" && Number.isFinite(request.startLine)) {
+      const position = await miniAppPosition(chatId, notebook);
+      const line = Math.min(position.linesPerPage, Math.max(1, Math.floor(request.startLine)));
+      startAt = { sideIndex: position.sideIndex, line };
+      await updateSettings(chatId, {
+        writeFlow: {
+          notebookId: notebook.id,
+          sideIndex: position.sideIndex,
+          line,
+          stage: "ready",
+        },
+      });
+    }
+
     const before = store.usedSides(notebook);
     await writeToNotebook(chatId, request.text);
     const after = store.usedSides(store.get(notebook.id) as Notebook);
-    return { mode: "notebook", pages: Math.max(0, after - before), notebook: notebook.title };
+    return {
+      mode: "notebook",
+      pages: Math.max(0, after - before),
+      notebook: notebook.title,
+      ...(startAt ? { side: startAt.sideIndex, line: startAt.line } : {}),
+    };
   }
 
   const activeStyle = styleFor(chatId);
@@ -1623,6 +1756,118 @@ async function sendMiniAppText(request: MiniAppRequest): Promise<MiniAppResult> 
   }
 
   return { mode: "pages", pages: pages.length, notebook: null };
+}
+
+/**
+ * `POST /mini-app/notebook`: chatdagi daftarni Mini App'dan boshqaradi.
+ *
+ * Bot chatidagi tugmalar bilan bir xil ishni qiladi — yangi daftar yaratish
+ * (varaq soni va qog'oz turini tanlab), nomini almashtirish, o'chirish, oxirgi
+ * tahrirni orqaga qaytarish va yozilgan betlarni PDF kitob qilib yuborish.
+ *
+ * Amalning natijasi qisqa xabar bo'lib qaytadi (Studio uni ko'rsatadi); chatga
+ * faqat kitob yuboriladi — qolgan amallar jimgina bajariladi, chunki ularni
+ * foydalanuvchi Mini App'ning o'zida ko'radi.
+ */
+async function miniAppNotebook(request: MiniAppNotebookRequest): Promise<MiniAppNotebookResult> {
+  const chatId = request.chatId;
+  const store = await books();
+
+  // Faqat shu chatning daftari ustida ishlaymiz: begona id jimgina rad etiladi.
+  const owned = (id: string | undefined): Notebook | undefined => {
+    const notebook = id ? store.get(id) : undefined;
+    return notebook && notebook.chatId === chatId ? notebook : undefined;
+  };
+
+  if (request.action === "create") {
+    const sheets = SHEET_CHOICES.find((choice) => choice === request.sheets);
+    if (!sheets) return { ok: false, message: "Varaq soni 12, 36, 48 yoki 96 bo'lishi kerak." };
+
+    const paper = PAPER_CHOICES.find((choice) => choice === request.paper) ?? "lined";
+    const list = store.list(chatId);
+    const wanted = request.title ? cleanTitle(request.title) : null;
+    if (request.title && !wanted) {
+      return { ok: false, message: "Nom bo'sh bo'lmasligi kerak — boshqa nom yozib ko'ring." };
+    }
+
+    const notebook = await store.create({
+      chatId,
+      sheets,
+      paper,
+      title: uniqueTitle(list, wanted ?? defaultBookTitle(list)),
+    });
+    // Yangi daftar darhol ochiq bo'ladi — chatdagi «➕ Yangi daftar» kabi.
+    await updateSettings(chatId, { notebookId: notebook.id });
+    return {
+      ok: true,
+      notebookId: notebook.id,
+      title: notebook.title,
+      message: `✅ «${notebook.title}» yaratildi — ${notebook.sheets} varaq (${store.capacity(
+        notebook,
+      )} bet), ${PAPER_LABEL[notebook.paper]}.`,
+    };
+  }
+
+  const notebook = owned(request.notebookId);
+  if (!notebook) {
+    return { ok: false, message: "Daftar topilmadi — ro'yxatni yangilab, qaytadan urinib ko'ring." };
+  }
+
+  if (request.action === "rename") {
+    const cleaned = request.title ? cleanTitle(request.title) : null;
+    if (!cleaned) return { ok: false, message: "Nom bo'sh bo'lmasligi kerak — boshqa nom yozib ko'ring." };
+
+    const next = uniqueTitle(store.list(chatId), cleaned, notebook.id);
+    if (!(await store.rename(notebook.id, next))) {
+      return { ok: false, message: "Nomni o'zgartirib bo'lmadi. Keyinroq urinib ko'ring. 🙏" };
+    }
+    const updated = store.get(notebook.id) as Notebook;
+    return {
+      ok: true,
+      notebookId: updated.id,
+      title: updated.title,
+      message: `✏️ Daftar nomi o'zgartirildi: «${updated.title}».`,
+    };
+  }
+
+  if (request.action === "remove") {
+    if (!(await store.remove(notebook.id))) {
+      return { ok: false, message: "Daftarni o'chirib bo'lmadi. Keyinroq urinib ko'ring. 🙏" };
+    }
+    // O'chirilgan daftarga ishora qilgan sozlamalar ham tozalanadi.
+    const chat = rawSettings(chatId);
+    await updateSettings(chatId, {
+      ...(chat.notebookId === notebook.id ? { notebookId: undefined } : {}),
+      ...(chat.cardId === notebook.id ? { cardId: undefined } : {}),
+      ...(chat.writeFlow?.notebookId === notebook.id ? { writeFlow: undefined } : {}),
+      ...(chat.deleteFlow?.notebookId === notebook.id ? { deleteFlow: undefined } : {}),
+      ...(chat.pending?.kind === "rename" && chat.pending.id === notebook.id ? { pending: undefined } : {}),
+    });
+    store.setActive(chatId, null);
+    return { ok: true, notebookId: null, title: null, message: `🗑 «${notebook.title}» o'chirildi.` };
+  }
+
+  // `undo`: daftar avvalgi holatiga qaytadi, natijani Mini App o'zi ko'rsatadi
+  // (holat so'rovi bet matnini qayta o'qiydi) — chatga bet yuborilmaydi.
+  if (request.action === "undo") {
+    const edit = await store.undo(notebook.id);
+    if (!edit) return { ok: false, message: "Orqaga qaytarish uchun tahrir amali yo'q." };
+    return {
+      ok: true,
+      notebookId: notebook.id,
+      title: notebook.title,
+      message: `↩️ «${edit.label}» amali orqaga qaytarildi — daftar avvalgi holatiga keldi.`,
+    };
+  }
+
+  // `book`: kitob (PDF) aynan shu amalda chatga yetkaziladi.
+  await sendNotebookBook(chatId, notebook);
+  return {
+    ok: true,
+    notebookId: notebook.id,
+    title: notebook.title,
+    message: `📄 «${notebook.title}» kitobi chatga yuborildi.`,
+  };
 }
 
 /**
@@ -2922,26 +3167,17 @@ async function saveStyle(chatId: number, name?: string): Promise<void> {
 
 /**
  * Namunaviy rasmni qabul qiladi: yuklab oladi, o'lchaydi va keyingi qadamga
- * o'tadi. Oqim boshlanmagan bo'lsa (masalan, rasm kutilmayotganda) shunchaki
- * yo'l-yo'riq yuboriladi.
+ * o'tadi.
+ *
+ * Namuna kutilmayotgan bo'lsa rasm **jimgina** qabul qilinadi: foydalanuvchi
+ * so'ramagan yo'l-yo'riq yuborilmaydi (uslub bo'limi menyuda allaqachon
+ * turadi).
  */
 async function handleStyleSample(chatId: number, fileId: string): Promise<void> {
   const step = rawSettings(chatId).styleStep;
-  // Faqat namuna qadamlari rasm qabul qiladi; o'chirish tanlovi yoki bo'sh
-  // holatda kelgan surat shunchaki yo'l-yo'riq bilan javoblanadi.
-  if (step !== "words" && step !== "digits") {
-    await sendMessage(
-      chatId,
-      [
-        "📷 Rasm qabul qilindi, lekin hozir namuna kutilmayapti.",
-        "",
-        `O'z yozuv uslubingizni nusxalash uchun ${L.styleCopy} bo'limini ochib,`,
-        `${L.styleStart} tugmasini bosing.`,
-      ].join("\n"),
-      mainKeyboard(),
-    );
-    return;
-  }
+  // Faqat namuna qadamlari rasm qabul qiladi; boshqa paytda kelgan suratga
+  // javob berilmaydi — ortiqcha xabar yubormaslik uchun.
+  if (step !== "words" && step !== "digits") return;
 
   await tg("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => undefined);
 
@@ -3013,7 +3249,7 @@ async function handleMenuLabelInner(chatId: number, label: string): Promise<bool
   // 0. Yordam va chat ID: buyruqlar ro'yxati o'rniga tugmalar.
   if (label === L.help) {
     await updateSettings(chatId, { menu: "main" });
-    await sendMessage(chatId, HELP_TEXT, mainKeyboard());
+    await sendMessage(chatId, helpText(), mainKeyboard());
     return true;
   }
   if (label === L.chatId) {
@@ -3407,7 +3643,7 @@ async function handleCommand(chatId: number, text: string): Promise<void> {
 
   if (command === "/help") {
     await updateSettings(chatId, { menu: "main" });
-    await sendMessage(chatId, HELP_TEXT, mainKeyboard());
+    await sendMessage(chatId, helpText(), mainKeyboard());
     return;
   }
 
@@ -3574,7 +3810,18 @@ async function processUpdate(update: TgUpdate): Promise<void> {
   if (await handleMenuLabel(chatId, text)) return;
   if (await handlePendingText(chatId, text)) return;
 
+  // Faqat havoladan iborat xabar daftarga yozilmaydi: varaqada manzil foydasiz,
+  // shuning uchun javob ham qaytarmaymiz (so'ralmagan xabar chiqmasin).
+  if (isBareLink(text)) return;
+
   await writeToNotebook(chatId, text);
+}
+
+/** Xabar faqat havola(lar)dan iboratmi — ya'ni daftarga yozadigan matn yo'qmi. */
+function isBareLink(text: string): boolean {
+  const parts = text.split(/\s+/).filter((part) => part.length > 0);
+  if (parts.length === 0) return false;
+  return parts.every((part) => /^(https?:\/\/|www\.|t\.me\/)\S+$/i.test(part));
 }
 
 /** Bitta update xato bersa ham bot yiqilmaydi: foydalanuvchiga qisqa uzr yuboramiz. */
@@ -3636,6 +3883,8 @@ async function startPolling(): Promise<void> {
  * Yo'llar:
  *   POST /telegram/webhook — faqat webhook rejimida (Telegram update'lari);
  *   POST /mini-app/send    — Studio (Mini App) natijasini chatga yuborish;
+ *   POST /mini-app/state   — Studio uchun daftarlar va joriy bet holati;
+ *   POST /mini-app/notebook— daftar yaratish/nomlash/o'chirish/undo/kitob;
  *   GET  /healthz          — server tirikligini tekshirish.
  *
  * Mini App uchun webhook shart emas: `MINI_APP_URL` o'rnatilgan bo'lsa, server
@@ -3656,6 +3905,8 @@ async function startHttpServer(options: { webhookBaseUrl?: string } = {}): Promi
     token: process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "",
     allowedOrigins,
     send: sendMiniAppText,
+    state: miniAppState,
+    notebook: miniAppNotebook,
   });
 
   const server = createServer((request, response) => {
@@ -3666,7 +3917,7 @@ async function startHttpServer(options: { webhookBaseUrl?: string } = {}): Promi
       return;
     }
 
-    if (path === MINI_APP_PATH) {
+    if (path === MINI_APP_PATH || path === MINI_APP_STATE_PATH || path === MINI_APP_NOTEBOOK_PATH) {
       void handleMiniApp(request, response);
       return;
     }
@@ -3700,7 +3951,11 @@ async function startHttpServer(options: { webhookBaseUrl?: string } = {}): Promi
   });
 
   await new Promise<void>((done) => server.listen(port, "0.0.0.0", done));
-  const routes = [HEALTH_PATH, ...(appUrl ? [MINI_APP_PATH] : []), ...(baseUrl ? [WEBHOOK_PATH] : [])];
+  const routes = [
+    HEALTH_PATH,
+    ...(appUrl ? [MINI_APP_PATH, MINI_APP_STATE_PATH, MINI_APP_NOTEBOOK_PATH] : []),
+    ...(baseUrl ? [WEBHOOK_PATH] : []),
+  ];
   console.log(`🌐 HTTP server 0.0.0.0:${port} da tinglayapti (${routes.join(", ")}).`);
 
   if (baseUrl) {

@@ -12,15 +12,19 @@
  *  4. «Qator tashlab yozish» aynan so'ralgan sonda bo'sh qator qoldirishini
  *     (o'ralgan paragrafdan keyin ham) va varaqadagi siyoh modelga mos
  *     kelishini — ya'ni rasmda ham o'sha qatorlar bo'sh turishini tekshiradi.
+ *  5. Qator koordinatalari (`lineRowsFor`) chizilgan varaqa geometriyasiga mos
+ *     kelishini: soni `linesPerPageFor` bilan bir xil, o'sish tartibida va
+ *     varaq chegarasidan chiqmasligini tekshiradi (Studio shu bo'yicha
+ *     qatorni tanlaydi).
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";
 import { renderNotebook } from "../src/lib/handwriting/render";
 import { FALLBACK_FONT_ID, FONT_LIBRARY, fontEntry } from "../src/lib/handwriting/fonts.generated";
 import { parseFont } from "../src/lib/handwriting/font";
-import { baselineForLine, layoutText } from "../src/lib/handwriting/layout";
+import { baselineForLine, layoutText, lineRowsFor, linesPerPageFor } from "../src/lib/handwriting/layout";
 import { appendChunk, measureLineCount, measureSideText } from "../src/lib/handwriting/notebook-text";
-import { INK_OPTIONS } from "../src/lib/handwriting/options";
+import { INK_OPTIONS, pageSizeFor } from "../src/lib/handwriting/options";
 import { DEFAULT_STYLE, type NotebookStyle } from "../src/lib/handwriting/types";
 
 const FONT_DIR = new URL("../src/assets/fonts/", import.meta.url);
@@ -711,6 +715,37 @@ async function verifySkipLines(): Promise<void> {
   );
 }
 
+/**
+ * Studio'da «qaysi qatordan?» tanlovi uchun qator koordinatalari chizilgan
+ * varaqa geometriyasiga mos kelishini tekshiradi.
+ */
+function verifyLineRows(): void {
+  console.log("\n=== qator koordinatalari (qatordan tanlash) ===");
+  const lineGap = 56;
+  for (const format of ["a4", "square"] as const) {
+    const rows = lineRowsFor(format, lineGap);
+    const expected = linesPerPageFor(format, lineGap);
+    const { height } = pageSizeFor(format);
+    assert(rows.length === expected, `${format}: ${rows.length} qator — linesPerPageFor bilan bir xil`);
+    assert(rows.length > 0, `${format}: qatorlar ro'yxati bo'sh emas`);
+
+    let ascending = true;
+    let inside = true;
+    rows.forEach((row, index) => {
+      if (index > 0 && row.top <= rows[index - 1].top) ascending = false;
+      if (row.top < 0 || row.top + row.height > height) inside = false;
+    });
+    assert(ascending, `${format}: qatorlar yuqoridan pastga o'sish tartibida`);
+    assert(inside, `${format}: barcha qatorlar varaq ichida (0..${height}px)`);
+
+    const first = rows[0];
+    const last = rows[rows.length - 1];
+    console.log(
+      `  ${format}: birinchi qator ${first.top}px, oxirgi qator ${last.top}px, qator balandligi ${last.height}px`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   await mkdir(OUT_DIR, { recursive: true });
 
@@ -726,6 +761,7 @@ async function main(): Promise<void> {
   await verifyPageSides();
   await verifyPagination();
   await verifySkipLines();
+  verifyLineRows();
 
   console.log(`\nNatijalar: ${OUT_DIR}`);
   if (failures > 0) {

@@ -4,7 +4,8 @@ import {
   type FontCategory,
   type FontLibraryEntry,
 } from "./fonts.generated";
-import type { FontId, InkColor, PageFormat, PaperType } from "./types";
+import { createRng } from "./rng";
+import type { FontId, InkColor, NotebookStyle, PageFormat, PaperType } from "./types";
 
 export const PAPER_OPTIONS: { id: PaperType; label: string; hint: string }[] = [
   { id: "lined", label: "Yo'l-yo'l", hint: "Chiziqli daftar — adabiyot, insho, diktant" },
@@ -105,4 +106,26 @@ export function pageSizeFor(format: PageFormat) {
 
 export function inkHex(ink: InkColor) {
   return INK_OPTIONS.find((option) => option.id === ink)?.hex ?? "#1B3E8F";
+}
+
+/**
+ * «Boshqacha yozsin» uchun yangi variant: boshqa qo'lyozma shrifti va yangi
+ * urug' (`seed`).
+ *
+ * Faqat `seed` o'zgarganda varaqa deyarli bir xil ko'rinadi — chiziqlar va
+ * harflar bir necha pikselgina siljiydi, ya'ni foydalanuvchi «hech narsa
+ * o'zgarmadi» deb o'ylaydi. Shuning uchun ko'rinadigan o'zgarish uchun shrift
+ * ham almashtiriladi. Tanlov `seed` orqali aniqlanadi — natija takrorlanadi va
+ * tekshiriladi. Joriy shriftdan boshqa shrift yo'q bo'lsa, uslub o'zgarmaydi.
+ */
+export function shuffleHandwriting(
+  style: Pick<NotebookStyle, "font" | "seed">,
+  seed: number,
+): Pick<NotebookStyle, "font" | "seed"> {
+  const others = FONT_LIBRARY.map((entry) => entry.id).filter((id) => id !== style.font);
+  if (others.length === 0) return { font: style.font, seed };
+
+  const rng = createRng(seed);
+  const index = Math.min(others.length - 1, Math.floor(rng.next() * others.length));
+  return { font: others[index] ?? style.font, seed };
 }

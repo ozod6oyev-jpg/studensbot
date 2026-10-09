@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   AlertTriangle,
@@ -16,11 +16,12 @@ import {
   X,
 } from "lucide-react";
 import { SiteFooter, SiteHeader } from "@/components/site-chrome";
+import { MiniAppWriter } from "@/components/mini-app-writer";
 import { useMiniApp } from "@/hooks/use-mini-app";
 import { cn } from "@/lib/utils";
 import { FontGallery } from "@/components/font-gallery";
 import { NotebookPreview } from "@/components/notebook-preview";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { Badge, Segmented, Slider } from "@/components/ui/controls";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label, Textarea } from "@/components/ui/form";
@@ -31,6 +32,7 @@ import {
   PAGE_FORMAT_OPTIONS,
   PAPER_OPTIONS,
   SUBJECT_PRESETS,
+  shuffleHandwriting,
 } from "@/lib/handwriting/options";
 import { DEFAULT_STYLE, type NotebookStyle } from "@/lib/handwriting/types";
 
@@ -68,17 +70,32 @@ export default function Studio() {
   const [style, setStyle] = useState<NotebookStyle>(DEFAULT_STYLE);
   const [showMathHelp, setShowMathHelp] = useState(false);
   const [showFonts, setShowFonts] = useState(false);
+  /** Mini App'da tanlangan boshlanish qatori (1 dan); tanlanmasa — `null`. */
+  const [startLine, setStartLine] = useState<number | null>(null);
 
   const { pages, loading, error, warnings, elapsedMs } = useNotebookRender(text, style);
   const miniApp = useMiniApp();
   const sending = miniApp.send.status === "sending";
+  /** Botdagi ochiq daftar — matn shunga yoziladi. */
+  const activeNotebookId = miniApp.state.state?.activeId ?? null;
+  const sideIndex = miniApp.state.state?.side?.sideIndex ?? null;
+
+  // Boshqa daftar (yoki boshqa bet) tanlansa, oldingi qator tanlovi eskirib qoladi.
+  useEffect(() => {
+    setStartLine(null);
+  }, [activeNotebookId, sideIndex]);
 
   const update = <K extends keyof NotebookStyle>(key: K, value: NotebookStyle[K]) =>
     setStyle((prev) => ({ ...prev, [key]: value }));
 
-  /** Telegram Mini App rejimida: matn va sozlamalarni botga yuborib, chatga qaytaradi. */
+  /** Telegram Mini App rejimida: matn, sozlamalar, daftar va qatorni botga yuboradi. */
   const sendToChat = () => {
-    void miniApp.sendToChat({ text, style });
+    void miniApp.sendToChat({
+      text,
+      style,
+      notebookId: activeNotebookId ?? undefined,
+      startLine: startLine ?? undefined,
+    });
   };
 
   /** "Adabiyot" yoki "Matematika" uchun tayyor kombinatsiyani qo'llaydi. */
@@ -86,6 +103,16 @@ export default function Studio() {
     const preset = SUBJECT_PRESETS.find((item) => item.id === presetId);
     if (!preset) return;
     setStyle((prev) => ({ ...prev, paper: preset.style.paper, font: preset.style.font }));
+  };
+
+  /**
+   * «Boshqacha yozsin»: yangi urug' bilan boshqa yozuv uslubi tanlanadi.
+   * Faqat urug' (seed) o'zgarsa varaqa deyarli bir xil qoladi, shuning uchun
+   * shrift ham almashtiriladi — yozuv ko'rinadigan darajada boshqacha chiqadi.
+   */
+  const writeDifferently = () => {
+    const seed = Date.now() % 999_999;
+    setStyle((prev) => ({ ...prev, ...shuffleHandwriting(prev, seed) }));
   };
 
   return (
@@ -189,7 +216,11 @@ export default function Studio() {
                     )}
                     <p className="text-xs leading-relaxed text-pencil/65">
                       Sozlamalar botda ham saqlanadi: keyingi varaqalar shu uslubda chiziladi.
-                      Chatda ochiq daftar bo'lsa, matn o'sha daftarga yoziladi.
+                      {activeNotebookId
+                        ? startLine
+                          ? ` Matn tanlangan daftarga ${startLine}-qatordan boshlab yoziladi.`
+                          : " Matn pastda tanlangan daftarga yoziladi."
+                        : " Chatda ochiq daftar bo'lsa, matn o'sha daftarga yoziladi."}
                     </p>
                   </>
                 ) : (
@@ -204,16 +235,22 @@ export default function Studio() {
                       buyrug'ini yuboring) — Studio to'g'ridan-to'g'ri Telegram oynasida ochiladi,
                       matnni yozasiz va natijani shu chatga yuborasiz.
                     </p>
-                    <Link
-                      to="/bot"
-                      className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
-                    >
-                      Mini App'ni qanday yoqish kerak?
-                    </Link>
                   </>
                 )}
               </CardContent>
             </Card>
+
+            {/* Mini App: qaysi daftarga va qaysi qatordan yozishni tanlash */}
+            {miniApp.active && (
+              <MiniAppWriter
+                bundle={miniApp.state}
+                onReload={(notebookId) => void miniApp.reloadState(notebookId)}
+                startLine={startLine}
+                onPickLine={setStartLine}
+                onManage={miniApp.manageNotebook}
+                busy={miniApp.notebookBusy}
+              />
+            )}
 
             <Card>
               <CardHeader>
@@ -392,11 +429,7 @@ export default function Studio() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="sage"
-                    size="sm"
-                    onClick={() => update("seed", Date.now() % 100000)}
-                  >
+                  <Button variant="sage" size="sm" onClick={writeDifferently}>
                     <Shuffle className="h-4 w-4" />
                     Boshqacha yozsin
                   </Button>
@@ -504,22 +537,27 @@ export default function Studio() {
               </CardContent>
             </Card>
 
-            <Card className="bg-sage-soft/40">
-              <CardContent className="flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <p className="hand text-2xl text-ink">Shu sozlamalar botda ham ishlaydi</p>
-                  <p className="mt-1 text-sm text-pencil/75">
-                    Telegramga matn yuborsangiz, bot aynan shu ko'rinishdagi rasmni qaytaradi.
-                  </p>
-                </div>
-                <Link
-                  to="/bot"
-                  className="rounded-xl bg-ink px-5 py-3 text-sm font-semibold text-paper shadow-note transition-transform hover:-translate-y-0.5"
-                >
-                  Botni ulash →
-                </Link>
-              </CardContent>
-            </Card>
+            {/* Mini App ichida «Botni ulash» bo'limi ko'rsatilmaydi: bot allaqachon
+                ulangan, ulash qo'llanmasi esa texnik ish — u faqat sayt ko'rinishida
+                chiqadi. */}
+            {!miniApp.active && (
+              <Card className="bg-sage-soft/40">
+                <CardContent className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <p className="hand text-2xl text-ink">Shu sozlamalar botda ham ishlaydi</p>
+                    <p className="mt-1 text-sm text-pencil/75">
+                      Telegramga matn yuborsangiz, bot aynan shu ko'rinishdagi rasmni qaytaradi.
+                    </p>
+                  </div>
+                  <Link
+                    to="/bot"
+                    className="rounded-xl bg-ink px-5 py-3 text-sm font-semibold text-paper shadow-note transition-transform hover:-translate-y-0.5"
+                  >
+                    Botni ulash →
+                  </Link>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
       </main>

@@ -31,6 +31,8 @@ import { FALLBACK_FONT_ID, fontEntry } from "../src/lib/handwriting/fonts.genera
 import { fontDisplayName } from "../src/lib/handwriting/names";
 import type { NotebookStyle } from "../src/lib/handwriting/types";
 
+import { studioText } from "../bot/index";
+
 const BOT_ENTRY = fileURLToPath(new URL("../bot/index.ts", import.meta.url));
 const FONT_DIR = new URL("../src/assets/fonts/", import.meta.url);
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -415,8 +417,11 @@ async function main(): Promise<void> {
       "yordam tugmasi qo'llanmani ko'rsatdi",
     );
     assert(
-      !helpReply.text.includes("Buyruqlar:") && !helpReply.text.includes("/fonts"),
-      "qo'llanmada buyruqlar ro'yxati yo'q (faqat tugmalar)",
+      !helpReply.text.includes("Buyruqlar:") &&
+        !helpReply.text.includes("/fonts") &&
+        !helpReply.text.includes("MINI_APP_URL") &&
+        !helpReply.text.includes(".env"),
+      "qo'llanmada buyruqlar ro'yxati ham, Mini App'ni ulash bo'yicha texnik ma'lumot ham yo'q",
     );
 
     // 🆔 Chat ID tugmasi.
@@ -437,8 +442,49 @@ async function main(): Promise<void> {
     assert(
       studioReply.text.includes("Studio") &&
         !studioReply.text.includes("bunday buyruq yo'q") &&
-        studioReply.text.includes("MINI_APP_URL"),
-      `/studio buyrug'i tanildi: "${studioReply.text.split("\n")[0]}"`,
+        !studioReply.text.includes("MINI_APP_URL") &&
+        !studioReply.text.includes(".env"),
+      `/studio buyrug'i tanildi va ulash bo'yicha texnik ko'rsatma bermadi: "${studioReply.text.split("\n")[0]}"`,
+    );
+
+    // Mini App sozlangan holatdagi matn: manzil matnda takrorlanmaydi (uni
+    // xabar ostidagi `web_app` tugmasi olib yuradi), o'rniga tugma ko'rsatiladi.
+    const studioWithUrl = studioText("https://domen.uz/studio");
+    assert(
+      !studioWithUrl.includes("http") && !studioWithUrl.includes("domen.uz"),
+      "Mini App matnida havola yo'q (manzilni tugma olib yuradi)",
+    );
+    assert(
+      studioWithUrl.includes("tugma") && studioWithUrl.includes("Studio"),
+      "o'rniga tugma ko'rsatmasi berildi",
+    );
+    const studioMissing = studioText(undefined);
+    assert(
+      !studioMissing.includes("MINI_APP_URL") &&
+        !studioMissing.includes(".env") &&
+        !studioMissing.includes("nginx"),
+      `Mini App sozlanmagan bo'lsa foydalanuvchiga ulash bo'yicha texnik ma'lumot berilmaydi: "${studioMissing.split("\n")[0]}"`,
+    );
+
+    // Namunadan tashqari surat va faqat havoladan iborat xabar: bot jim turadi —
+    // so'ralmagan xabar ham, ortiqcha varaqa ham chiqmaydi.
+    console.log("\n=== 1a-holat: namunadan tashqari surat va havola jimgina o'tkaziladi ===");
+    const textsBeforeQuiet = mock.texts.length;
+    const photosBeforeQuiet = mock.photos.length;
+    const strayFile = mock.addFile(
+      await samplePhoto(SAMPLE_WORDS, { paper: "lined", marginLine: true, lineGap: 70 }),
+      "tasodifiy.jpg",
+    );
+    mock.pushPhoto(TEST_CHAT_ID, strayFile);
+    send("https://domen.uz/studio");
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    assert(
+      mock.texts.length === textsBeforeQuiet,
+      `namunadan tashqari suratga ham, havolaga ham javob yuborilmadi (${mock.texts.length - textsBeforeQuiet} ta xabar)`,
+    );
+    assert(
+      mock.photos.length === photosBeforeQuiet,
+      `havola varaqqa yozilmadi (${mock.photos.length - photosBeforeQuiet} ta rasm)`,
     );
 
     console.log("\n=== 2-holat: daftar yo'q — matn kiritish tugmasi ===");
@@ -521,6 +567,24 @@ async function main(): Promise<void> {
     );
     const rectoMargin = marginColumnX(firstPage.bytes);
     assert(rectoMargin > 0 && rectoMargin < 400, `old tomonda qizil chegara chapda (x = ${rectoMargin})`);
+
+    // Havola ochiq daftarga ham yozilmaydi: varaqa chizilmaydi, bet o'zgarmaydi.
+    console.log("\n=== 4a-holat: havola ochiq daftarga yozilmaydi ===");
+    const textsBeforeOpenLink = mock.texts.length;
+    const photosBeforeOpenLink = mock.photos.length;
+    send("https://domen.uz/studio");
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    assert(
+      mock.texts.length === textsBeforeOpenLink && mock.photos.length === photosBeforeOpenLink,
+      "ochiq daftarga ham havola uchun javob qaytarilmadi",
+    );
+    const booksAfterLink = JSON.parse(await readFile(join(dataDir, "notebooks.json"), "utf8")) as {
+      notebooks?: { sides?: { text?: string }[] }[];
+    };
+    assert(
+      !(booksAfterLink.notebooks?.[0]?.sides ?? []).some((side) => (side.text ?? "").includes("domen.uz")),
+      "havola betlar matniga yozilmadi",
+    );
 
     console.log("\n=== 5-holat: varaq to'lgach keyingi bet — orqa tomon ===");
     const beforeLong = mock.photos.length;
