@@ -117,6 +117,17 @@ export default function Studio() {
   };
 
   /**
+   * Matnni almashtiradi (yozish, namuna yoki tozalash).
+   *
+   * Oldingi yuborish natijasi xabari yangi matnga tegishli emas — shuning uchun
+   * matn o'zgarganda u o'chiriladi.
+   */
+  const replaceText = (next: string) => {
+    setText(next);
+    if (miniApp.send.status !== "idle") miniApp.reset();
+  };
+
+  /**
    * «Boshqacha yozsin»: yangi urug' bilan boshqa yozuv uslubi tanlanadi.
    * Faqat urug' (seed) o'zgarsa varaqa deyarli bir xil qoladi, shuning uchun
    * shrift ham almashtiriladi — yozuv ko'rinadigan darajada boshqacha chiqadi.
@@ -279,12 +290,7 @@ export default function Studio() {
                 <Textarea
                   rows={12}
                   value={text}
-                  onChange={(event) => {
-                    setText(event.target.value);
-                    // Matn o'zgardi — oldingi "yuborildi" (yoki xato) xabari endi
-                    // yangi matnga tegishli emas, shuning uchun o'chiriladi.
-                    if (miniApp.send.status !== "idle") miniApp.reset();
-                  }}
+                  onChange={(event) => replaceText(event.target.value)}
                   placeholder="Daftarga ko'chirilishi kerak bo'lgan matnni shu yerga yozing yoki joylashtiring…"
                 />
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -292,15 +298,19 @@ export default function Studio() {
                     {text.length} belgi · {pages.length || 1} varaq
                   </span>
                   <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setText(SAMPLE_LITERATURE)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => replaceText(SAMPLE_LITERATURE)}
+                    >
                       <BookOpen className="h-4 w-4" />
                       Adabiyot namunasi
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => setText(SAMPLE_MATH)}>
+                    <Button variant="outline" size="sm" onClick={() => replaceText(SAMPLE_MATH)}>
                       <Sigma className="h-4 w-4" />
                       Matematika namunasi
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => setText("")}>
+                    <Button variant="ghost" size="sm" onClick={() => replaceText("")}>
                       <Eraser className="h-4 w-4" />
                       Tozalash
                     </Button>
