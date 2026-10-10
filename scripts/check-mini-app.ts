@@ -351,6 +351,10 @@ interface StateSide {
   sideIndex: number;
   sideCount: number;
   text: string;
+  /** Betning o'z uslubi (Studio betni shu bilan chizadi). */
+  style?: { paper?: unknown; font?: unknown } | null;
+  /** Joriy bet yangi bo'lsa — oxirgi yozilgan bet. */
+  previous?: { index: number; text: string } | null;
   linesPerPage: number;
   usedLines: number;
   nextLine: number;
@@ -691,6 +695,23 @@ async function checkMiniAppStudio(): Promise<void> {
     "tor ekranda natija birinchi ko'rinadi (asboblar pastda)",
   );
 
+  // Mini App'da namuna matn «qotib» turmasligi kerak: matn maydoni bo'sh
+  // boshlanadi va natija o'rnida yuqorida tanlangan daftarning beti ko'rsatiladi.
+  assert(
+    /isMiniApp\(\)\s*\?\s*""\s*:\s*SAMPLE_LITERATURE/.test(studioPage),
+    "Mini App'da namuna matn oldindan yozilmaydi (brauzerda qoladi)",
+  );
+  assert(
+    /notebookPage=\{/.test(studioPage) &&
+      /notebookPage\?\.text\s*\?\?\s*text/.test(studioPage) &&
+      /side\.previous/.test(studioPage),
+    "Studio tanlangan daftar betini yuklaydi (joriy bet yoki oxirgi yozilgan bet)",
+  );
+  assert(
+    /notebookPage/.test(studioFile) && /daftardan/.test(studioFile),
+    "Mini App studiyasi ko'rsatilayotgan betni «daftardan» deb belgilaydi",
+  );
+
   // Kitob ko'rinishidagi qator/so'z raqamlari botdagi o'lchov bilan aynan bir
   // xil bo'lishi shart: Mini App o'sha raqamlarni yuboradi, bot esa aynan o'sha
   // so'zlarni o'chiradi. Zaxira (kirillcha) shrift yoki shrift masshtabi
@@ -874,6 +895,17 @@ async function main(): Promise<void> {
     assert(
       side !== null && side !== undefined && side.sideIndex === 0 && side.text === SIDE_TEXT,
       `joriy bet va uning matni qaytdi (${side?.sideIndex}-bet)`,
+    );
+    // Mini App shu maydonlar bilan tanlangan daftarning betini chizadi: uslub
+    // bo'lmasa bet boshqa qog'oz/siyohda, «oxirgi bet» bo'lmasa esa bo'sh
+    // varaqa ko'rsatilardi.
+    assert(
+      typeof side?.style?.paper === "string" && typeof side?.style?.font === "string",
+      `joriy betning uslubi ham qaytdi (qog'oz: ${String(side?.style?.paper)})`,
+    );
+    assert(
+      side?.previous === null,
+      "betda matn bor ekan, «oxirgi bet» ko'rsatilmaydi (previous = null)",
     );
     assert(
       (side?.usedLines ?? 0) >= 1 && (side?.nextLine ?? 0) === (side?.usedLines ?? 0) + 1,
@@ -1294,6 +1326,38 @@ async function main(): Promise<void> {
     assert(
       rangeUntouched.body.side?.text === rangeTextBefore,
       "rad etilgan oraliqlardan keyin matn o'zgarmadi",
+    );
+
+    // --- Yangi bet: Studio oxirgi yozilgan betni ko'rsatadi ---------------
+    // (Mini App bo'sh varaqa o'rniga tanlangan daftarning haqiqiy betini
+    // ko'rsatishi kerak — buning uchun bot «oxirgi bet» ni ham yuboradi.)
+    console.log("\n=== 4b-qism: to'lgan betdan keyin oxirgi bet ko'rsatiladi ===");
+    const fullBook = await postNotebook(apiPort, {
+      initData,
+      action: "create",
+      title: "To'lish sinovi",
+      sheets: 12,
+    });
+    const fullId = fullBook.body.notebookId ?? "";
+    const fullStart = await postState(apiPort, { initData, notebookId: fullId });
+    const linesPerPage = fullStart.body.side?.linesPerPage ?? 0;
+    assert(linesPerPage > 1, `betga sig'adigan qatorlar soni ma'lum (${linesPerPage})`);
+
+    // Har bir satr — bitta qisqa so'z, shuning uchun aynan shuncha qator chiziladi
+    // va bet to'ladi (bot ham shu chegarani ishlatadi).
+    const filler = Array.from({ length: linesPerPage }, (_, index) => `so${index + 1}`).join("\n");
+    const filled = await postSend(apiPort, { initData, text: filler, notebookId: fullId, startLine: 1 });
+    assert(filled.status === 200, `bet to'ldirildi (${filled.status})`);
+
+    const fullState = await postState(apiPort, { initData, notebookId: fullId });
+    const newSide = fullState.body.side;
+    assert(
+      (newSide?.previous?.text ?? "").trim().length > 0 && newSide?.previous?.index === 0,
+      `to'lgan betdan keyin oxirgi yozilgan bet qaytdi (${newSide?.previous?.index}-bet)`,
+    );
+    assert(
+      typeof newSide?.style?.paper === "string" && typeof newSide?.style?.font === "string",
+      "joriy betning uslubi ham qaytdi (bet shu bilan chiziladi)",
     );
 
     // --- Uslubni nusxalash: namuna surati botda o'lchanadi ----------------

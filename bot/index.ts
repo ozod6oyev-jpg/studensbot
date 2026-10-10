@@ -1600,11 +1600,25 @@ async function miniAppPosition(chatId: number, notebook: Notebook): Promise<Mini
   const style = styleFor(chatId);
   const linesPerPage = lastMeasure?.linesPerPage ?? linesPerPageFor(style.pageFormat, style.lineGap);
 
+  // Joriy bet bo'sh (yangi bet boshlanmoqda) bo'lsa, Studio bo'sh varaqa
+  // o'rniga oxirgi yozilgan betni ko'rsatadi: foydalanuvchi yuqorida
+  // tanlagan daftarining haqiqiy ko'rinishini ko'rishi kerak.
+  const previous =
+    startNewSide && lastSide >= 0
+      ? {
+          index: lastSide,
+          text: notebook.sides[lastSide]?.text ?? "",
+          style: sideStyle(chatId, lastSide),
+        }
+      : null;
+
   if (startNewSide) {
     return {
       sideIndex,
       sideCount: usedSides,
       text: "",
+      style: sideStyle(chatId, sideIndex),
+      previous,
       linesPerPage,
       usedLines: 0,
       nextLine: 1,
@@ -1617,6 +1631,8 @@ async function miniAppPosition(chatId: number, notebook: Notebook): Promise<Mini
     sideIndex,
     sideCount: usedSides,
     text: notebook.sides[sideIndex]?.text ?? "",
+    style: sideStyle(chatId, sideIndex),
+    previous,
     linesPerPage,
     usedLines,
     nextLine: Math.min(linesPerPage, usedLines + 1),

@@ -112,6 +112,11 @@ export interface MiniAppStudioProps {
   onPickLine: (line: number) => void;
   /** Brauzerda chizilgan natija (matn va sozlamalardan hisoblanadi). */
   render: StudioRenderState;
+  /**
+   * Natija o'rniga ko'rsatilayotgan daftar beti (matn maydoni bo'sh bo'lganda),
+   * `null` — varaqa foydalanuvchi matnidan chizilmoqda.
+   */
+  notebookPage: { index: number; sideCount: number } | null;
   /** Bot bilan aloqa: daftarlar, yuborish, daftar amallari, yopish. */
   miniApp: ReturnType<typeof useMiniApp>;
 }
@@ -182,6 +187,7 @@ export const MiniAppStudio = memo(function MiniAppStudio({
   startLine,
   onPickLine,
   render,
+  notebookPage,
   miniApp,
 }: MiniAppStudioProps) {
   const [panel, setPanel] = useState<PanelId>("text");
@@ -413,9 +419,15 @@ export const MiniAppStudio = memo(function MiniAppStudio({
         <div className="rounded-2xl border border-paper-edge bg-paper-deep/60 p-2.5 shadow-paper">
           <div className="flex items-center justify-between gap-2 pb-2">
             <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <Badge tone="sage" className="px-2.5 py-0.5 text-[11px]">
-                {pages.length || 1} varaq
-              </Badge>
+              {notebookPage ? (
+                <Badge tone="marker" className="px-2.5 py-0.5 text-[11px]">
+                  📖 {notebookPage.index + 1}-bet · daftardan
+                </Badge>
+              ) : (
+                <Badge tone="sage" className="px-2.5 py-0.5 text-[11px]">
+                  {pages.length || 1} varaq
+                </Badge>
+              )}
               <Badge className="max-w-[9rem] truncate px-2.5 py-0.5 text-[11px]">{fontLabel}</Badge>
               {render.elapsedMs !== null && (
                 <Badge className="px-2.5 py-0.5 text-[11px]">{render.elapsedMs} ms</Badge>
@@ -490,7 +502,9 @@ export const MiniAppStudio = memo(function MiniAppStudio({
                     <Sparkles className="h-6 w-6 text-ink/30" />
                     <p className="hand text-2xl text-ink/70">Matn yozing</p>
                     <p className="max-w-[16rem] text-xs leading-relaxed text-pencil/65">
-                      «Matn» bo'limiga yozganingiz shu yerda daftar varaqasi bo'lib chiqadi.
+                      {activeNotebook
+                        ? `«${activeNotebook.title}» dagi joriy bet hali bo'sh — yozganingiz shu betdan boshlanadi.`
+                        : "«Matn» bo'limiga yozganingiz shu yerda daftar varaqasi bo'lib chiqadi."}
                     </p>
                   </>
                 )}

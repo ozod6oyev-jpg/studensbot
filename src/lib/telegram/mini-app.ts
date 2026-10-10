@@ -358,15 +358,29 @@ export interface MiniAppNotebook {
   active: boolean;
 }
 
+/** Daftardagi bitta bet (Studio uni ko'rsatadi): matn va shu betning uslubi. */
+export interface MiniAppPreviousSide {
+  index: number;
+  text: string;
+  style?: Partial<NotebookStyle>;
+}
+
 /**
  * Tanlangan daftarning joriy beti: shu betdan keyingi yozuv davom etadi.
  * `text` — betdagi mavjud matn (Studio uni chizib ko'rsatadi), `nextLine` esa
  * taklif qilinadigan boshlanish qatori (1 dan boshlab).
+ *
+ * `style` va `previous` botning yangiroq versiyasida qo'shilgan — eski javobda
+ * bo'lmasligi mumkin, shuning uchun ixtiyoriy.
  */
 export interface MiniAppSide {
   sideIndex: number;
   sideCount: number;
   text: string;
+  /** Shu betning uslubi (betni o'z qog'ozi va siyohi bilan chizish uchun). */
+  style?: Partial<NotebookStyle>;
+  /** Yangi bet boshlanayotgan bo'lsa — oxirgi yozilgan bet. */
+  previous?: MiniAppPreviousSide | null;
   linesPerPage: number;
   usedLines: number;
   nextLine: number;

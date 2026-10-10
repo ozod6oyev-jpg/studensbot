@@ -125,6 +125,17 @@ export interface MiniAppNotebookInfo {
   active: boolean;
 }
 
+/**
+ * Daftardagi bitta bet (Studio uni ko'rsatishi uchun): matn va shu betning
+ * uslubi (chegara tomoni bet indeksiga qarab almashadi).
+ */
+export interface MiniAppPreviousSide {
+  /** 0 dan boshlanadigan bet indeksi. */
+  index: number;
+  text: string;
+  style: unknown;
+}
+
 /** Tanlangan daftarning joriy beti: qaysi betga, qaysi qatordan yoziladi. */
 export interface MiniAppSideInfo {
   /** 0 dan boshlanadigan bet indeksi (Studio'da `sideIndex + 1` ko'rinadi). */
@@ -133,6 +144,13 @@ export interface MiniAppSideInfo {
   sideCount: number;
   /** Shu betdagi matn (Studio uni chizib ko'rsatadi). */
   text: string;
+  /** Shu betning uslubi — betni to'g'ri (o'z qog'ozi va siyohi bilan) chizish uchun. */
+  style: unknown;
+  /**
+   * Yangi bet boshlanayotgan bo'lsa (joriy bet bo'sh) — oxirgi yozilgan bet.
+   * Studio bo'sh varaqa o'rniga daftarning haqiqiy betini ko'rsatadi.
+   */
+  previous: MiniAppPreviousSide | null;
   /** Bir betga sig'adigan qatorlar soni. */
   linesPerPage: number;
   /** Band qatorlar soni. */

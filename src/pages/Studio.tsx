@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
   ChevronDown,
@@ -21,6 +21,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label, Textarea } from "@/components/ui/form";
 import { useMiniApp } from "@/hooks/use-mini-app";
 import { useNotebookRender } from "@/hooks/use-notebook-render";
+import { isMiniApp } from "@/lib/telegram/mini-app";
 import { FONT_LIBRARY, fontEntry } from "@/lib/handwriting/fonts.generated";
 import {
   GEOMETRY_PRESETS,
@@ -56,19 +57,64 @@ import { DEFAULT_STYLE, type NotebookStyle } from "@/lib/handwriting/types";
  * Telegram ichida bu sahifa ishlatilmaydi — u yerda `MiniAppStudio` ochiladi.
  */
 export default function Studio() {
-  const [text, setText] = useState(SAMPLE_LITERATURE);
+  // Mini App'da namuna matn oldindan yozilmaydi: maydon bo'sh turadi va natija
+  // o'rnida yuqorida tanlangan daftarning beti ko'rsatiladi (namuna matn qotib
+  // turmasin). Brauzerdagi Studio'da namuna birinchi taassurot uchun qoladi.
+  const [text, setText] = useState(() => (isMiniApp() ? "" : SAMPLE_LITERATURE));
   const [style, setStyle] = useState<NotebookStyle>(DEFAULT_STYLE);
   const [showMathHelp, setShowMathHelp] = useState(false);
   const [showFonts, setShowFonts] = useState(false);
   /** Mini App'da tanlangan boshlanish qatori (1 dan); tanlanmasa — `null`. */
   const [startLine, setStartLine] = useState<number | null>(null);
 
-  const { pages, loading, error, warnings, elapsedMs } = useNotebookRender(text, style);
   const miniApp = useMiniApp();
   /** Botdagi ochiq daftar — Mini App'da matn shunga yoziladi. */
   const activeNotebookId = miniApp.state.state?.activeId ?? null;
-  const sideIndex = miniApp.state.state?.side?.sideIndex ?? null;
-  const sideNextLine = miniApp.state.state?.side?.nextLine ?? null;
+  const side = miniApp.state.state?.side ?? null;
+  const sideIndex = side?.sideIndex ?? null;
+  const sideNextLine = side?.nextLine ?? null;
+
+  /**
+   * Daftardan ko'rsatiladigan bet.
+   *
+   * Mini App'da matn maydoni bo'sh bo'lsa natija o'rniga shu bet chiziladi —
+   * yuqorida tanlangan daftar shunday «yuklanadi» (joriy bet yangi bo'lsa,
+   * oxirgi yozilgan bet ko'rsatiladi). Foydalanuvchi yozishni boshlasa, natija
+   * yana o'z matnidan hisoblanadi.
+   */
+  const notebookPage = useMemo(() => {
+    if (!miniApp.active || !side || text.trim().length > 0) return null;
+    if (side.text.trim().length > 0) {
+      return {
+        index: side.sideIndex,
+        text: side.text,
+        style: { ...DEFAULT_STYLE, ...(side.style ?? {}) },
+      };
+    }
+    const previous = side.previous;
+    if (previous && previous.text.trim().length > 0) {
+      return {
+        index: previous.index,
+        text: previous.text,
+        style: { ...DEFAULT_STYLE, ...(previous.style ?? {}) },
+      };
+    }
+    return null;
+  }, [miniApp.active, side, text]);
+
+  const { pages, loading, error, warnings, elapsedMs } = useNotebookRender(
+    notebookPage?.text ?? text,
+    notebookPage?.style ?? style,
+  );
+
+  // Mini App studiyasi `memo` bilan o'ralgan: prop so'rovda bir xil bo'lishi
+  // uchun qiymatlar son ko'rinishida uzatiladi (obyekt har renderda yangi
+  // bo'lsa, `memo` foydasi qolmasdi).
+  const sideCount = side?.sideCount ?? 0;
+  const notebookPageBadge = useMemo(
+    () => (notebookPage ? { index: notebookPage.index, sideCount } : null),
+    [notebookPage, sideCount],
+  );
 
   const stats = textStats(text);
 
@@ -195,6 +241,7 @@ export default function Studio() {
         startLine={startLine}
         onPickLine={pickLine}
         render={{ pages, loading, error, warnings, elapsedMs }}
+        notebookPage={notebookPageBadge}
         miniApp={miniApp}
       />
     );
