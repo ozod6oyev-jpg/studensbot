@@ -312,6 +312,7 @@ export const MiniAppStudio = memo(function MiniAppStudio({
             type="button"
             title="Tez amallar"
             aria-label="Tez amallar"
+            aria-expanded={menuOpen}
             onClick={() => setMenuOpen((prev) => !prev)}
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-ink/15 bg-white/70 text-ink/70 transition-colors hover:text-ink"
           >
@@ -470,7 +471,12 @@ export const MiniAppStudio = memo(function MiniAppStudio({
                 src={current.url}
                 alt={`${current.index}-varaq`}
                 className="w-full"
-                onClick={() => setZoom(true)}
+                onClick={() => {
+                  // Kattalashtirish har safar ekranga sig'dirishdan boshlanadi:
+                  // aks holda oldingi masshtab (masalan 200%) saqlanib qolardi.
+                  setOverlayScale(null);
+                  setZoom(true);
+                }}
               />
             ) : (
               <div className="paper-lined flex min-h-[16rem] flex-col items-center justify-center gap-2 p-6 text-center">
@@ -524,8 +530,10 @@ export const MiniAppStudio = memo(function MiniAppStudio({
 
           {render.warnings.length > 0 && (
             <ul className="mt-2 space-y-1.5 rounded-xl border border-marker/40 bg-marker-soft/50 p-2.5 text-xs text-ink">
-              {render.warnings.map((warning) => (
-                <li key={warning} className="flex gap-2">
+              {render.warnings.map((warning, index) => (
+                // Bir xil matnli ogohlantirish ikki marta kelishi mumkin — kalit
+                // faqat matndan olinsa React bir xil kalit haqida ogohlantiradi.
+                <li key={`${index}-${warning}`} className="flex gap-2">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-marker" />
                   <span>{warning}</span>
                 </li>
@@ -901,7 +909,7 @@ export const MiniAppStudio = memo(function MiniAppStudio({
             className="h-11 shrink-0 px-4"
             onClick={() => {
               setNotice(null);
-              miniApp.sendToChat({
+              void miniApp.sendToChat({
                 text,
                 style,
                 notebookId: activeNotebook?.id ?? undefined,

@@ -61,6 +61,8 @@ export const NotebookPreview = memo(function NotebookPreview({
   const [active, setActive] = useState(0);
   /** `null` — varaqa kenglikka sig'diriladi (sahifa siljimaydi). */
   const [zoom, setZoom] = useState<number | null>(null);
+  /** «Hammasi» yuklab olish ketma-ket ishlaydi — ikki marta bosilmasin. */
+  const [saving, setSaving] = useState(false);
 
   const firstUrl = pages[0]?.url ?? "";
   useEffect(() => {
@@ -71,10 +73,12 @@ export const NotebookPreview = memo(function NotebookPreview({
   const current = pages[safeActive];
   const totalKb = current ? Math.max(1, Math.round(current.bytes / 1024)) : 0;
 
+  // Eng kichik qadamda «−» o'chirilgan (aks holda u «Sig'dirish»ga sakrab,
+  // varaqani kattalashtirib yuborardi).
+  const smallestZoom = ZOOM_STEPS[0];
   const zoomOut = () => {
     if (zoom === null) return;
-    const previous = [...ZOOM_STEPS].reverse().find((step) => step < zoom);
-    setZoom(previous ?? null);
+    setZoom([...ZOOM_STEPS].reverse().find((step) => step < zoom) ?? smallestZoom);
   };
   const zoomIn = () => {
     if (zoom === null) {
@@ -141,7 +145,7 @@ export const NotebookPreview = memo(function NotebookPreview({
                 type="button"
                 title="Kichraytirish"
                 aria-label="Kichraytirish"
-                disabled={zoom === null}
+                disabled={zoom === null || zoom <= smallestZoom}
                 onClick={zoomOut}
                 className="flex h-8 w-8 items-center justify-center rounded-lg border border-ink/15 bg-white/80 text-ink/70 transition-colors hover:text-ink disabled:opacity-40"
               >
@@ -237,14 +241,25 @@ export const NotebookPreview = memo(function NotebookPreview({
             <Button
               variant="marker"
               size="sm"
+              disabled={saving}
               onClick={async () => {
-                for (const page of pages) {
-                  download(page.url, `daftar-${page.index}.png`);
-                  await new Promise((resolve) => setTimeout(resolve, 400));
+                if (saving) return;
+                setSaving(true);
+                try {
+                  for (const page of pages) {
+                    download(page.url, `daftar-${page.index}.png`);
+                    await new Promise((resolve) => setTimeout(resolve, 400));
+                  }
+                } finally {
+                  setSaving(false);
                 }
               }}
             >
-              <FileDown className="h-4 w-4" />
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <FileDown className="h-4 w-4" />
+              )}
               Hammasi ({pages.length})
             </Button>
           </div>
@@ -253,8 +268,8 @@ export const NotebookPreview = memo(function NotebookPreview({
 
       {warnings.length > 0 && (
         <ul className="space-y-2 rounded-xl border border-marker/40 bg-marker-soft/50 p-3 text-sm text-ink">
-          {warnings.map((warning) => (
-            <li key={warning} className="flex gap-2">
+          {warnings.map((warning, index) => (
+            <li key={`${index}-${warning}`} className="flex gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-marker" />
               <span className="min-w-0">{warning}</span>
             </li>

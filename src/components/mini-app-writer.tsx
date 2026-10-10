@@ -12,6 +12,12 @@ import { DEFAULT_STYLE, type PaperType } from "@/lib/handwriting/types";
 import type { MiniAppNotebookPayload, MiniAppNotebookResult } from "@/lib/telegram/mini-app";
 import { cn } from "@/lib/utils";
 
+/**
+ * Botdagi `TITLE_MAX` (`bot/db.ts`) bilan bir xil: undan uzun nom botda
+ * jimgina qisqartirilardi, shuning uchun maydon ham shu chegarani ko'rsatadi.
+ */
+const TITLE_MAX = 40;
+
 /** Botdagi `SHEET_CHOICES` bilan bir xil varaq sonlari. */
 const SHEET_OPTIONS: { id: string; label: string; hint: string }[] = [
   { id: "12", label: "12", hint: "12 varaq — 24 bet, qisqa ishlar uchun" },
@@ -168,7 +174,13 @@ export function MiniAppWriter({
                 <button
                   key={notebook.id}
                   type="button"
-                  onClick={() => onReload(notebook.id)}
+                  onClick={() => {
+                    // Boshqa daftarga o'tiladi: oldingi daftar haqidagi natija
+                    // xabari va ochiq shakl yangi daftarga tegishli bo'lmaydi.
+                    setOutcome(null);
+                    setMode("idle");
+                    onReload(notebook.id);
+                  }}
                   className={cn(
                     "rounded-xl border px-3 py-2 text-left transition-all",
                     isActive
@@ -227,7 +239,7 @@ export function MiniAppWriter({
                   <Label>Nom (ixtiyoriy)</Label>
                   <Input
                     value={newTitle}
-                    maxLength={60}
+                    maxLength={TITLE_MAX}
                     placeholder="Masalan: Matematika 8-sinf"
                     onChange={(event) => setNewTitle(event.target.value)}
                   />
@@ -315,7 +327,7 @@ export function MiniAppWriter({
                   <Label>Yangi nom</Label>
                   <Input
                     value={renameTitle}
-                    maxLength={60}
+                    maxLength={TITLE_MAX}
                     autoFocus
                     onChange={(event) => setRenameTitle(event.target.value)}
                   />

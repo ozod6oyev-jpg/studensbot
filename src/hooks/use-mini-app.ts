@@ -141,7 +141,14 @@ export function useMiniApp() {
     }));
   }, []);
 
-  reloadStateRef.current = reloadState;
+  // Ref'ni render paytida emas, effektda yozamiz: render bekor qilinsa
+  // (React StrictMode/concurrent) tinglovchilar chala funksiyaga bog'lanib
+  // qolmasligi kerak. Effektlar deklaratsiya tartibida ishlaydi va hodisa
+  // tinglovchisi ro'yxatdan o'tadigan effektdan keyin bajariladi, shuning uchun
+  // birinchi chaqiruvdayoq eng yangi funksiya ref'da bo'ladi.
+  useEffect(() => {
+    reloadStateRef.current = reloadState;
+  }, [reloadState]);
 
   // Mini App ochilishi bilan daftarlar ro'yxati ko'rinib turishi kerak —
   // foydalanuvchi qo'shimcha tugma bosmasin. Brauzerda so'rov yuborilmaydi.

@@ -658,7 +658,7 @@ async function checkMiniAppStudio(): Promise<void> {
 
   // Asboblar: studiya matn bilan ishlash, tayyor o'lchamlar va varaqani
   // kattalashtirishni o'zi taklif qilishi kerak — foydalanuvchi brauzerni
-  // masshtablamasin yoki sahifani yon tomonga surmasiн.
+  // masshtablamasin yoki sahifani yon tomonga surmasin.
   assert(
     studioFile.includes("@/lib/handwriting/text-tools") &&
       studioPage.includes("@/lib/handwriting/text-tools"),
@@ -689,6 +689,29 @@ async function checkMiniAppStudio(): Promise<void> {
   assert(
     /flex-col-reverse/.test(studioPage),
     "tor ekranda natija birinchi ko'rinadi (asboblar pastda)",
+  );
+
+  // Kitob ko'rinishidagi qator/so'z raqamlari botdagi o'lchov bilan aynan bir
+  // xil bo'lishi shart: Mini App o'sha raqamlarni yuboradi, bot esa aynan o'sha
+  // so'zlarni o'chiradi. Zaxira (kirillcha) shrift yoki shrift masshtabi
+  // hisobga olinmasa, kirillcha matnda chegaralar surilib ketadi.
+  const bookFile = await readFile(
+    fileURLToPath(new URL("../src/components/notebook-book.tsx", import.meta.url)),
+    "utf8",
+  );
+  const botFile = await readFile(fileURLToPath(new URL("../bot/index.ts", import.meta.url)), "utf8");
+  assert(
+    /measureSideText\(\{[\s\S]{0,400}?primary,[\s\S]{0,200}?secondary,/.test(bookFile),
+    "Mini App bet o'lchovida zaxira (kirillcha) shrift ham beriladi",
+  );
+  assert(
+    /sizeScale:\s*fontEntry\(id\)\?\.sizeScale\s*\?\?\s*1/.test(bookFile),
+    "Mini App bet o'lchovida shrift masshtabi ham hisobga olinadi",
+  );
+  assert(
+    /measureSideText\(\{[\s\S]{0,400}?secondary,/.test(botFile) &&
+      /sizeScale:\s*fontEntry\(primaryId\)\?\.sizeScale\s*\?\?\s*1/.test(botFile),
+    "botning o'lchovi ham xuddi shu shartlarni beradi (ikki tomon bir xil)",
   );
 }
 

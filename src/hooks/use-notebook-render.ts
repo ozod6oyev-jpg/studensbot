@@ -38,15 +38,28 @@ export function useNotebookRender(text: string, style: Partial<NotebookStyle>): 
 
   const sequenceRef = useRef(0);
   const urlsRef = useRef<string[]>([]);
+  const staleRef = useRef<string[]>([]);
   const mountedRef = useRef(true);
   const styleKey = JSON.stringify(style);
+
+  // Eski varaqa havolalari **keyingi renderdan keyin** bo'shatiladi: hozir
+  // ekranda turgan `<img src>` hali o'sha havolani ko'rsatib turadi va uni
+  // darhol bekor qilish rasmni bir kadrga sindirib qo'yardi (ayniqsa rasm hali
+  // yuklanib ulgurmagan bo'lsa).
+  useEffect(() => {
+    const stale = staleRef.current;
+    if (stale.length === 0) return;
+    staleRef.current = [];
+    for (const url of stale) URL.revokeObjectURL(url);
+  });
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      for (const url of urlsRef.current) URL.revokeObjectURL(url);
+      for (const url of [...urlsRef.current, ...staleRef.current]) URL.revokeObjectURL(url);
       urlsRef.current = [];
+      staleRef.current = [];
     };
   }, []);
 
@@ -55,7 +68,7 @@ export function useNotebookRender(text: string, style: Partial<NotebookStyle>): 
 
     if (!trimmed) {
       sequenceRef.current += 1;
-      for (const url of urlsRef.current) URL.revokeObjectURL(url);
+      staleRef.current.push(...urlsRef.current);
       urlsRef.current = [];
       setState(IDLE);
       return;
@@ -73,7 +86,7 @@ export function useNotebookRender(text: string, style: Partial<NotebookStyle>): 
           if (requestId !== sequenceRef.current || !mountedRef.current) return;
 
           const urls = result.pages.map((page) => pngToObjectUrl(page.png));
-          for (const url of urlsRef.current) URL.revokeObjectURL(url);
+          staleRef.current.push(...urlsRef.current);
           urlsRef.current = urls;
 
           setState({

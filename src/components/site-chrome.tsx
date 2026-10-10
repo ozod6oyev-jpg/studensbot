@@ -43,21 +43,24 @@ export function SiteHeader({
           <span className="leading-tight">
             <span className="hand block text-xl text-ink">Student Daftari</span>
             <span className="block text-[10px] font-semibold uppercase tracking-[0.18em] text-pencil/60">
-              qo'lyozma generatör
+              qo'lyozma generatori
             </span>
           </span>
         </Link>
 
         <nav className="flex items-center gap-1.5">
           {navLinks.map((link) => {
-            const active = pathname === link.href;
+            // `isCurrent` — shu sahifa ochiqmi (yuqoridagi `active` — Mini App
+            // holati; ikkalasi aralashib ketmasligi uchun nom boshqacha).
+            const isCurrent = pathname === link.href;
             return (
               <Link
                 key={link.href}
                 to={link.href}
+                aria-current={isCurrent ? "page" : undefined}
                 className={cn(
                   "rounded-lg px-3 py-2 text-sm font-semibold transition-colors",
-                  active ? "bg-ink/8 text-ink" : "text-pencil/70 hover:bg-ink/5 hover:text-ink",
+                  isCurrent ? "bg-ink/8 text-ink" : "text-pencil/70 hover:bg-ink/5 hover:text-ink",
                 )}
               >
                 {link.label}

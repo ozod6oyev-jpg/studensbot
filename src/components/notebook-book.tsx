@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useNotebookRender } from "@/hooks/use-notebook-render";
 import { loadFontBytes } from "@/lib/handwriting/browser";
 import { parseFont } from "@/lib/handwriting/font";
-import { FALLBACK_FONT_ID } from "@/lib/handwriting/fonts.generated";
+import { FALLBACK_FONT_ID, fontEntry } from "@/lib/handwriting/fonts.generated";
 import { measureSideText, type SideTextMeasure } from "@/lib/handwriting/notebook-text";
 import { pageSizeFor } from "@/lib/handwriting/options";
 import { DEFAULT_STYLE, type NotebookStyle } from "@/lib/handwriting/types";
@@ -59,32 +59,67 @@ function pointText(point: MiniAppPoint): string {
 }
 
 /**
+ * O'lchov holati: qator/so'z tugmalari faqat `ready` bo'lganda ko'rsatiladi.
+ *
+ * Bu holatsiz panel yuklanayotganda "bu betda yozuv yo'q" deb aytib qo'yardi
+ * (o'lchov hali kelmagan bo'lsa ham), xato bo'lganda esa jimgina bo'sh
+ * qolardi.
+ */
+type MeasureStatus = "idle" | "loading" | "ready" | "error";
+
+interface SideMeasureState {
+  measure: SideTextMeasure | null;
+  status: MeasureStatus;
+}
+
+/**
  * Betdagi qator va so'z tuzilishini o'lchaydi (bot bilan bir xil yo'l:
  * o'sha shrift, o'sha uslub). Rasm chizishdan oldin shrift fayli yuklanadi.
  */
-function useSideMeasure(text: string, style: NotebookStyle): SideTextMeasure | null {
-  const [measure, setMeasure] = useState<SideTextMeasure | null>(null);
+function useSideMeasure(text: string, style: NotebookStyle): SideMeasureState {
+  const [state, setState] = useState<SideMeasureState>({ measure: null, status: "idle" });
   const key = `${style.font ?? FALLBACK_FONT_ID}\u0000${style.pageFormat}\u0000${style.lineGap}\u0000${text}`;
 
   useEffect(() => {
     let cancelled = false;
     if (text.trim().length === 0) {
-      setMeasure(null);
+      setState({ measure: null, status: "idle" });
       return () => {
         cancelled = true;
       };
     }
 
+    setState({ measure: null, status: "loading" });
+
     void (async () => {
       try {
         const id = style.font ?? FALLBACK_FONT_ID;
-        const bytes = await loadFontBytes(id);
+        // Botning `measureSide` i bilan bir xil shartlar: zaxira (kirillcha)
+        // shrift va shriftning o'z masshtabi ham hisobga olinadi. Ularsiz
+        // kirillcha matnda qatorlar boshqa joydan uzilib, qator/so'z raqamlari
+        // surilib ketardi — natijada noto'g'ri so'zlar o'chirilardi.
+        const [bytes, fallbackBytes] = await Promise.all([
+          loadFontBytes(id),
+          id === FALLBACK_FONT_ID
+            ? Promise.resolve(null)
+            : loadFontBytes(FALLBACK_FONT_ID).catch(() => null),
+        ]);
         if (cancelled) return;
         const primary = parseFont(id, bytes);
+        const secondary = fallbackBytes ? parseFont(FALLBACK_FONT_ID, fallbackBytes) : undefined;
         if (cancelled) return;
-        setMeasure(measureSideText({ text, style, primary }));
+        setState({
+          measure: measureSideText({
+            text,
+            style,
+            primary,
+            secondary,
+            sizeScale: fontEntry(id)?.sizeScale ?? 1,
+          }),
+          status: "ready",
+        });
       } catch {
-        if (!cancelled) setMeasure(null);
+        if (!cancelled) setState({ measure: null, status: "error" });
       }
     })();
 
@@ -95,7 +130,7 @@ function useSideMeasure(text: string, style: NotebookStyle): SideTextMeasure | n
     // o'z ichiga oladi.
   }, [key]);
 
-  return measure;
+  return state;
 }
 
 /**
@@ -207,7 +242,17 @@ export function NotebookBook({ notebookId, title, onManage, busy, refreshKey }: 
       const result = await onManage({ action: "clearSide", notebookId, sideIndex: side.index });
       setArmed(null);
       setOutcome({ ok: result.ok, message: result.message });
-      if (result.ok) setReloadTick((prev) => prev + 1);
+      if (result.ok) {
+        // Bet bo'shadi: undagi eski oraliq tanlovi endi ma'nosiz, shuning uchun
+        // tanlovni ham tozalaymiz (aks holda "Ha, o'chirish" eski nuqtalarni
+        // yuborib, "so'z topilmadi" degan xabar chiqardi).
+        setStep(null);
+        setPending(null);
+        setFrom(null);
+        setTo(null);
+        setPickHint(null);
+        setReloadTick((prev) => prev + 1);
+      }
     },
     [notebookId, onManage],
   );
@@ -240,8 +285,14 @@ export function NotebookBook({ notebookId, title, onManage, busy, refreshKey }: 
         return;
       }
       if (step === "endLine") {
-        const candidate: MiniAppPoint = { side: sideIndex, line, word: 1 };
-        if (from && !afterPoint(candidate, from)) {
+        // Bir xil qatorning o'zi ham tugash bo'lishi mumkin (masalan oraliq shu
+        // qatorning ichida tugasa) — qaysi so'z ekani keyingi qadamda
+        // tanlanadi, shuning uchun bu yerda faqat oldinroq bet/qator rad
+        // etiladi.
+        const before =
+          from !== null &&
+          (sideIndex < from.side || (sideIndex === from.side && line < from.line));
+        if (before) {
           setPickHint("Tugash joyi boshlanishidan oldin bo'lmaydi — boshqa qatorni tanlang.");
           return;
         }
@@ -541,7 +592,7 @@ function BookHalf({
   const page = rendered.pages[0];
   const text = side?.text ?? "";
   const hasText = text.trim().length > 0;
-  const measure = useSideMeasure(text, style);
+  const { measure, status: measureStatus } = useSideMeasure(text, style);
 
   // Bet indeksi: `side` bo'lmasa — `-1` (solishtirish hech qachon mos kelmaydi).
   const sideIndex = side?.index ?? -1;
@@ -576,11 +627,24 @@ function BookHalf({
               <p className="text-[10px] font-semibold uppercase tracking-wide text-pencil/60">
                 Qatorni tanlang
               </p>
-              {linesWithWords.length === 0 ? (
-                <p className="mt-1 text-[11px] leading-relaxed text-pencil/65">
-                  Bu betda yozuv yo&apos;q — boshqa betdan tanlang.
+              {measureStatus === "loading" && (
+                <p className="mt-1 flex items-center gap-1.5 text-[11px] text-pencil/65">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Qatorlar o&apos;lchanmoqda…
                 </p>
-              ) : (
+              )}
+              {measureStatus === "error" && (
+                <p className="mt-1 text-[11px] leading-relaxed text-margin">
+                  Qatorlarni o&apos;lchab bo&apos;lmadi — betni qaytadan ochib ko&apos;ring.
+                </p>
+              )}
+              {(measureStatus === "ready" || measureStatus === "idle") &&
+                linesWithWords.length === 0 && (
+                  <p className="mt-1 text-[11px] leading-relaxed text-pencil/65">
+                    Bu betda yozuv yo&apos;q — boshqa betdan tanlang.
+                  </p>
+                )}
+              {measureStatus === "ready" && linesWithWords.length > 0 && (
                 <div className="mt-1 flex flex-wrap gap-1">
                   {linesWithWords.map((line) => {
                     const isFrom = from?.side === sideIndex && from.line === line.index;
@@ -613,31 +677,53 @@ function BookHalf({
               <p className="text-[10px] font-semibold uppercase tracking-wide text-pencil/60">
                 {pending.line}-qatordagi so&apos;zni tanlang
               </p>
-              <div className="mt-1 flex flex-wrap gap-1">
-                {pendingWords.map((word, index) => {
-                  const wordNumber = index + 1;
-                  const isFrom =
-                    from?.side === sideIndex && from.line === pending.line && from.word === wordNumber;
-                  const isTo = to?.side === sideIndex && to.line === pending.line && to.word === wordNumber;
-                  return (
-                    <button
-                      key={`${pending.line}-${wordNumber}`}
-                      type="button"
-                      disabled={busy}
-                      title={word}
-                      onClick={() => onPickWord(sideIndex, pending.line, wordNumber)}
-                      className={cn(
-                        "max-w-[7rem] truncate rounded-lg border px-1.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-40",
-                        isFrom && "border-marker bg-marker/25 text-ink ring-1 ring-marker/60",
-                        isTo && "border-margin bg-margin-soft/50 text-margin",
-                        !isFrom && !isTo && "border-ink/15 bg-white text-ink/70 hover:border-ink/35",
-                      )}
-                    >
-                      {wordNumber} {word}
-                    </button>
-                  );
-                })}
-              </div>
+              {measureStatus === "error" && (
+                <p className="mt-1 text-[11px] leading-relaxed text-margin">
+                  So&apos;zlarni o&apos;lchab bo&apos;lmadi — betni qaytadan ochib ko&apos;ring.
+                </p>
+              )}
+              {measureStatus === "loading" && (
+                <p className="mt-1 flex items-center gap-1.5 text-[11px] text-pencil/65">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  So&apos;zlar o&apos;lchanmoqda…
+                </p>
+              )}
+              {(measureStatus === "idle" ||
+                (measureStatus === "ready" && pendingWords.length === 0)) && (
+                <p className="mt-1 text-[11px] leading-relaxed text-pencil/65">
+                  Bu qatorda so&apos;z yo&apos;q — boshqa qatorni tanlang.
+                </p>
+              )}
+              {measureStatus === "ready" && pendingWords.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {pendingWords.map((word, index) => {
+                    const wordNumber = index + 1;
+                    const isFrom =
+                      from?.side === sideIndex &&
+                      from.line === pending.line &&
+                      from.word === wordNumber;
+                    const isTo =
+                      to?.side === sideIndex && to.line === pending.line && to.word === wordNumber;
+                    return (
+                      <button
+                        key={`${pending.line}-${wordNumber}`}
+                        type="button"
+                        disabled={busy}
+                        title={word}
+                        onClick={() => onPickWord(sideIndex, pending.line, wordNumber)}
+                        className={cn(
+                          "max-w-[7rem] truncate rounded-lg border px-1.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-40",
+                          isFrom && "border-marker bg-marker/25 text-ink ring-1 ring-marker/60",
+                          isTo && "border-margin bg-margin-soft/50 text-margin",
+                          !isFrom && !isTo && "border-ink/15 bg-white text-ink/70 hover:border-ink/35",
+                        )}
+                      >
+                        {wordNumber} {word}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </>
           )}
         </div>

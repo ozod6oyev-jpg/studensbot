@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   BookOpen,
   ChevronDown,
@@ -84,18 +84,55 @@ export default function Studio() {
 
   const resetStyle = useCallback(() => setStyle(DEFAULT_STYLE), []);
 
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  /**
+   * Tez tugma matn o'rtasiga qo'shilgandan keyin kursor qayerga qo'yiladi.
+   * `null` — kursor o'zgartirilmaydi (oddiy yozishda u o'zi joyida qoladi).
+   */
+  const caretRef = useRef<number | null>(null);
+
   /**
    * Matnni almashtiradi (yozish, asbob, namuna yoki tozalash).
    *
    * Oldingi yuborish natijasi xabari yangi matnga tegishli emas — shuning uchun
-   * matn o'zgarganda u o'chiriladi.
+   * matn o'zgarganda u o'chiriladi. Diqqat: `miniApp` obyekti har renderda yangi
+   * bo'ladi, shuning uchun bog'liqlik sifatida faqat ishlatiladigan qiymatlar
+   * olinadi (`sendStatus`, `resetSend`) — aks holda funksiya barqaror bo'lmaydi.
    */
+  const sendStatus = miniApp.send.status;
+  const resetSend = miniApp.reset;
   const replaceText = useCallback(
     (next: string) => {
       setText(next);
-      if (miniApp.send.status !== "idle") miniApp.reset();
+      if (sendStatus !== "idle") resetSend();
     },
-    [miniApp],
+    [sendStatus, resetSend],
+  );
+
+  /** Matn o'zgargach kursor tanlangan joyga qaytariladi (tez tugmalar uchun). */
+  useLayoutEffect(() => {
+    const caret = caretRef.current;
+    if (caret === null) return;
+    caretRef.current = null;
+    const area = textAreaRef.current;
+    if (!area) return;
+    area.focus();
+    area.setSelectionRange(caret, caret);
+  }, [text]);
+
+  /**
+   * Tez tugma: matematik belgi **kursor turgan joyga** qo'shiladi (matn oxiriga
+   * emas), shunda foydalanuvchi kursorni qo'lda ko'chirishga majbur bo'lmaydi.
+   */
+  const insertSnippet = useCallback(
+    (snippet: string) => {
+      const area = textAreaRef.current;
+      const start = area?.selectionStart ?? text.length;
+      const end = area?.selectionEnd ?? text.length;
+      caretRef.current = start + snippet.length;
+      replaceText(`${text.slice(0, start)}${snippet}${text.slice(end)}`);
+    },
+    [replaceText, text],
   );
 
   /** Tanlangan qatorni bosish/qayta bosish. */
@@ -187,7 +224,9 @@ export default function Studio() {
             </CardHeader>
             <CardContent className="space-y-3">
               <Textarea
+                ref={textAreaRef}
                 rows={10}
+                aria-label="Daftarga yoziladigan matn"
                 value={text}
                 onChange={(event) => replaceText(event.target.value)}
                 placeholder="Daftarga ko'chirilishi kerak bo'lgan matnni shu yerga yozing yoki joylashtiring…"
@@ -333,6 +372,7 @@ export default function Studio() {
                   </div>
                   <Slider
                     className="mt-2"
+                    label="Harf o'lchami"
                     min={STYLE_RANGES.fontSize.min}
                     max={STYLE_RANGES.fontSize.max}
                     value={style.fontSize}
@@ -346,6 +386,7 @@ export default function Studio() {
                   </div>
                   <Slider
                     className="mt-2"
+                    label="Qatorlar orasi"
                     min={STYLE_RANGES.lineGap.min}
                     max={STYLE_RANGES.lineGap.max}
                     value={style.lineGap}
@@ -359,6 +400,7 @@ export default function Studio() {
                   </div>
                   <Slider
                     className="mt-2"
+                    label="Chap chegara"
                     min={STYLE_RANGES.marginLeft.min}
                     max={STYLE_RANGES.marginLeft.max}
                     value={style.marginLeft}
@@ -374,6 +416,7 @@ export default function Studio() {
                   </div>
                   <Slider
                     className="mt-2"
+                    label="Qo'lyozma jonliligi"
                     min={STYLE_RANGES.wobble.min}
                     max={STYLE_RANGES.wobble.max}
                     step={0.05}
@@ -420,6 +463,8 @@ export default function Studio() {
           <Card className="p-0">
             <button
               type="button"
+              aria-expanded={showFonts}
+              aria-controls="studio-fonts"
               onClick={() => setShowFonts((prev) => !prev)}
               className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left"
             >
@@ -441,7 +486,7 @@ export default function Studio() {
               </span>
             </button>
             {showFonts && (
-              <div className="border-t border-paper-edge px-4 py-5 sm:px-6">
+              <div id="studio-fonts" className="border-t border-paper-edge px-4 py-5 sm:px-6">
                 <FontGallery value={style.font} onChange={pickFont} onPreset={applyPreset} />
               </div>
             )}
@@ -450,6 +495,8 @@ export default function Studio() {
           <Card className="p-0">
             <button
               type="button"
+              aria-expanded={showMathHelp}
+              aria-controls="studio-math-help"
               onClick={() => setShowMathHelp((prev) => !prev)}
               className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left"
             >
@@ -465,14 +512,17 @@ export default function Studio() {
               />
             </button>
             {showMathHelp && (
-              <div className="space-y-3 border-t border-paper-edge px-4 py-4 sm:px-6">
+              <div
+                id="studio-math-help"
+                className="space-y-3 border-t border-paper-edge px-4 py-4 sm:px-6"
+              >
                 <div className="flex flex-wrap gap-1.5">
                   {MATH_SNIPPETS.map((snippet) => (
                     <button
                       key={snippet}
                       type="button"
-                      title="Matnga qo'shish"
-                      onClick={() => replaceText(`${text}${snippet}`)}
+                      title="Kursor turgan joyga qo'shish"
+                      onClick={() => insertSnippet(snippet)}
                       className="rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 font-mono text-xs text-ink transition-colors hover:border-ink/40"
                     >
                       {snippet}

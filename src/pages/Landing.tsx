@@ -66,7 +66,7 @@ const syntax = [
   { code: "\\sqrt{x}", note: "ildiz" },
 ];
 
-/** Mini App (Telegram ichidagi Studio) qadamları. */
+/** Mini App (Telegram ichidagi Studio) qadamlari. */
 const miniAppSteps = [
   {
     title: "Botda «Studio» tugmasini bosing",
@@ -74,7 +74,7 @@ const miniAppSteps = [
   },
   {
     title: "Matn va sozlamalarni tanlang",
-    text: "Varaq turi, siyoh rangi va yozuv uslubini tanlab, matnni terasiz — natija ekranda darhol ko'rinadi, hech narsa serverga yuborilmaydi.",
+    text: "Varaq turi, siyoh rangi va yozuv uslubini tanlab, matnni terasiz — natija ekranda darhol ko'rinadi, rasm shu qurilmaning o'zida chiziladi.",
   },
   {
     title: "«Chatga yuborish» ni bosing",
@@ -120,7 +120,7 @@ const faqs = [
   {
     question: "Internet uzilsa yoki oflayn bo'lsam bo'ladimi?",
     answer:
-      "Rasm yaratish uchun qisqa vaqt ichida javob qaytariladi, shuning uchun barqaror aloqa tavsiya etiladi. Studio esa to'liq brauzerda ishlaydi — matn hech qayerga yuborilmaydi.",
+      "Rasm yaratish uchun bot bilan aloqa kerak, shuning uchun barqaror internet tavsiya etiladi. Studio rasmni qurilmaning o'zida chizadi — matn chatga faqat «Chatga yuborish» bosilganda ketadi.",
   },
   {
     question: "O'z qo'lyozmamni botga o'rgatsam bo'ladimi?",

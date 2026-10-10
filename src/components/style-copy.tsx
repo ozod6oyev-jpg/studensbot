@@ -91,6 +91,12 @@ export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
   const [name, setName] = useState("");
   const [measuring, setMeasuring] = useState(false);
   const [saving, setSaving] = useState(false);
+  /**
+   * Yoqish/o'chirish so'rovi ketayotgan payt. Uslub tugmalari shu vaqtda
+   * bloklanadi — aks holda tez ikki marta bosilganda ikkita so'rov ketib,
+   * ikkinchisi «uslub topilmadi» xatosi bilan qaytardi.
+   */
+  const [pending, setPending] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [armedRemove, setArmedRemove] = useState<string | null>(null);
 
@@ -121,7 +127,7 @@ export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
   };
 
   const pickWords = async (file: File | undefined) => {
-    if (!file) return;
+    if (!file || measuring) return;
     const image = await prepare(file);
     if (!image) return;
     setWordsImage(image);
@@ -129,7 +135,7 @@ export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
   };
 
   const pickDigits = async (file: File | undefined) => {
-    if (!file) return;
+    if (!file || measuring) return;
     const image = await prepare(file);
     if (!image) return;
     setDigitsImage(image);
@@ -152,41 +158,57 @@ export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
   };
 
   const save = async () => {
-    if (!wordsImage) return;
+    if (!wordsImage || saving) return;
     setSaving(true);
-    const trimmed = name.trim();
-    const result = await manageStyle({
-      action: "measure",
-      wordsImage,
-      ...(digitsImage ? { digitsImage } : {}),
-      ...(trimmed ? { name: trimmed } : {}),
-    });
-    setSaving(false);
-    setOutcome({ ok: result.ok, message: result.message });
-    if (result.ok) {
-      setName("");
-      setWordsImage(null);
-      setDigitsImage(null);
-      setStep("start");
-      onReload();
+    try {
+      const trimmed = name.trim();
+      const result = await manageStyle({
+        action: "measure",
+        wordsImage,
+        ...(digitsImage ? { digitsImage } : {}),
+        ...(trimmed ? { name: trimmed } : {}),
+      });
+      setOutcome({ ok: result.ok, message: result.message });
+      if (result.ok) {
+        setName("");
+        setWordsImage(null);
+        setDigitsImage(null);
+        setStep("start");
+        onReload();
+      }
+    } finally {
+      // Xato tashlansa ham tugma «qotib» qolmasligi kerak.
+      setSaving(false);
     }
   };
 
   const applyStyle = async (id: string) => {
+    if (pending) return;
     setArmedRemove(null);
-    const result = await manageStyle({ action: "apply", styleId: id });
-    setOutcome({ ok: result.ok, message: result.message });
-    if (result.ok) onReload();
+    setPending(true);
+    try {
+      const result = await manageStyle({ action: "apply", styleId: id });
+      setOutcome({ ok: result.ok, message: result.message });
+      if (result.ok) onReload();
+    } finally {
+      setPending(false);
+    }
   };
 
   const removeStyle = async (id: string) => {
+    if (pending) return;
     setArmedRemove(null);
-    const result = await manageStyle({ action: "remove", styleId: id });
-    setOutcome({ ok: result.ok, message: result.message });
-    if (result.ok) onReload();
+    setPending(true);
+    try {
+      const result = await manageStyle({ action: "remove", styleId: id });
+      setOutcome({ ok: result.ok, message: result.message });
+      if (result.ok) onReload();
+    } finally {
+      setPending(false);
+    }
   };
 
-  const working = measuring || saving || busy;
+  const working = measuring || saving || pending || busy;
 
   return (
     <Card className="bg-white/70">

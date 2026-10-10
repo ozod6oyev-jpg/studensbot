@@ -1,11 +1,15 @@
 import { cn } from "@/lib/utils";
 
+export type BadgeTone = "ink" | "marker" | "sage" | "margin";
+
 export function Badge({
   className,
   tone = "ink",
   ...props
-}: React.HTMLAttributes<HTMLSpanElement> & { tone?: "ink" | "marker" | "sage" | "margin" }) {
-  const tones: Record<string, string> = {
+}: React.HTMLAttributes<HTMLSpanElement> & { tone?: BadgeTone }) {
+  // `Record<BadgeTone, string>`: yangi ohang qo'shilib, rangi yozilmasa —
+  // TypeScript shuni darhol aytadi (ilgari jimgina rangsiz badge chiqardi).
+  const tones: Record<BadgeTone, string> = {
     ink: "bg-ink/8 text-ink",
     marker: "bg-marker-soft text-ink",
     sage: "bg-sage-soft text-sage",
@@ -50,6 +54,7 @@ export function Segmented<T extends string>({
             key={option.id}
             type="button"
             title={option.hint}
+            aria-pressed={active}
             onClick={() => onChange(option.id)}
             className={cn(
               "whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold transition-colors",
@@ -68,8 +73,9 @@ export function Segmented<T extends string>({
  * Yoqish/o'chirish tugmasi (switch).
  *
  * Mini App'da checkbox mayda bo'lib qoladi va barmoq bilan bosish qiyin —
- * shuning uchun kattaroq, sirg'anadigan tugma ishlatiladi. Holat `aria-pressed`
- * orqali ham aytiladi.
+ * shuning uchun kattaroq, sirg'anadigan tugma ishlatiladi. Holat ekran
+ * o'quvchiga `role="switch"` + `aria-checked` orqali aytiladi (faqat rang bilan
+ * emas).
  */
 export function Switch({
   checked,
@@ -85,7 +91,8 @@ export function Switch({
   return (
     <button
       type="button"
-      aria-pressed={checked}
+      role="switch"
+      aria-checked={checked}
       title={hint}
       onClick={() => onChange(!checked)}
       className="flex w-full items-center justify-between gap-3 text-left text-sm font-medium text-ink"
@@ -113,6 +120,7 @@ export function Slider({
   min,
   max,
   step = 1,
+  label,
   onChange,
   className,
 }: {
@@ -120,19 +128,25 @@ export function Slider({
   min: number;
   max: number;
   step?: number;
+  /** Ekran o'quvchi uchun nom (ko'rinadigan sarlavha yonida turadi). */
+  label?: string;
   onChange: (value: number) => void;
   className?: string;
 }) {
   return (
     <input
       type="range"
+      aria-label={label}
       min={min}
       max={max}
       step={step}
       value={value}
       onChange={(event) => onChange(Number(event.target.value))}
       className={cn(
-        "h-2 w-full cursor-pointer appearance-none rounded-full bg-ink/15 accent-marker outline-none",
+        // `outline-none` faqat standart konturni olib tashlaydi: buning o'rniga
+        // klaviatura bilan fokuslanganda ko'rinadigan halqa qo'yiladi, aks holda
+        // surilma fokusda ekani bilinmay qolardi.
+        "h-2 w-full cursor-pointer appearance-none rounded-full bg-ink/15 accent-marker outline-none focus-visible:ring-2 focus-visible:ring-marker/60 focus-visible:ring-offset-2 focus-visible:ring-offset-paper",
         className,
       )}
     />

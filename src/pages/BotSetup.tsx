@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowRight,
@@ -22,16 +22,27 @@ import { useMiniApp } from "@/hooks/use-mini-app";
 /* ------------------------------------------------------------------ */
 
 function CodeBlock({ code, label }: { code: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const timer = useRef<number | undefined>(undefined);
+
+  // Taymer komponent yopilganda ham tozalanadi — aks holda yopilgan
+  // komponentda holat o'zgartirishga urinish qolib ketadi.
+  useEffect(() => () => window.clearTimeout(timer.current), []);
 
   async function copy() {
+    // Nusxa olish ba'zi brauzerlarda umuman mavjud emas (`navigator.clipboard`
+    // yo'q) yoki ruxsat so'ralganda rad etiladi — buni jimgina yutib
+    // yubormaymiz, foydalanuvchiga aytamiz.
+    let copied = false;
     try {
       await navigator.clipboard.writeText(code);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      copied = true;
     } catch {
-      setCopied(false);
+      copied = false;
     }
+    window.clearTimeout(timer.current);
+    setState(copied ? "copied" : "failed");
+    timer.current = window.setTimeout(() => setState("idle"), 1500);
   }
 
   return (
@@ -43,14 +54,24 @@ function CodeBlock({ code, label }: { code: string; label?: string }) {
         <button
           type="button"
           onClick={copy}
-          title={copied ? "Nusxa olindi" : "Nusxa olish"}
+          title={
+            state === "copied"
+              ? "Nusxa olindi"
+              : state === "failed"
+                ? "Nusxa olmadi — matnni qo'lda belgilab oling"
+                : "Nusxa olish"
+          }
           className={cn(
             "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors",
-            copied ? "bg-sage-soft text-sage" : "text-ink/70 hover:bg-ink/10 hover:text-ink",
+            state === "copied"
+              ? "bg-sage-soft text-sage"
+              : state === "failed"
+                ? "bg-margin-soft/40 text-margin"
+                : "text-ink/70 hover:bg-ink/10 hover:text-ink",
           )}
         >
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-          {copied ? "Nusxa olindi" : "Nusxa olish"}
+          {state === "copied" ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+          {state === "copied" ? "Nusxa olindi" : state === "failed" ? "Nusxa olmadi" : "Nusxa olish"}
         </button>
       </div>
       <pre className="overflow-x-auto px-3.5 py-3 text-[13px] leading-relaxed text-ink">
@@ -144,7 +165,7 @@ function CommandTable({ rows }: { rows: { code: string; text: string }[] }) {
 /* ------------------------------------------------------------------ */
 
 const botCommands = [
-  { code: "/start", text: "Salomlashadi va pastdagi doimiy menyuni chiqaradi: ✍️ Matn kiritish, ⚙️ Sozlamalar, ℹ️ Yordam, 🆔 Chat ID." },
+  { code: "/start", text: "Salomlashadi va pastdagi doimiy menyuni chiqaradi: ✍️ Matn kiritish, ⚙️ Sozlamalar, ℹ️ Yordam." },
   { code: "/help", text: "Qisqa qo'llanma: hamma narsa menyu tugmalarida, buyruqlar ro'yxati ko'rsatilmaydi." },
   { code: "/settings", text: "Sozlamalar menyusini ochadi: siyoh rangi, qog'oz turi, yozuv uslubi, yozuv sozlamalari, daftarlar va o'z qo'lyozmangizni nusxalash." },
   { code: "/lined", text: "Yo'l-yo'l (chiziqli) daftar — adabiyot, insho, diktant uchun." },
@@ -161,7 +182,7 @@ const botCommands = [
   { code: "/style", text: "«Uslubimni nusxalash» bo'limini ochadi: o'z qo'lyozmangizni namunadan o'lchab, shaxsiy uslub yasaydi (/uslub ham ishlaydi)." },
   { code: "/size 34", text: "Yozuv o'lchamini o'zgartirish (26–52 oralig'ida)." },
   { code: "/file", text: "Natijani rasm sifatida emas, PNG fayl sifatida yuborish rejimini yoqadi/o'chiradi." },
-  { code: "/id", text: "Chat ID'ni ko'rsatadi — botni alohida chat yoki guruhga ulashda yordam beradi (endi 🆔 Chat ID tugmasi ham bor)." },
+  { code: "/id", text: "Chat ID'ni ko'rsatadi — botni alohida chat yoki guruhga ulashda yordam beradi. Bu buyruq uchun menyuda alohida tugma yo'q." },
 ];
 
 const suggestedFonts = [
@@ -242,7 +263,7 @@ export default function BotSetup() {
                 uchta qadam yetarli:
               </p>
               <ol className="ml-4 list-decimal space-y-1.5">
-                <li>Studio'da matnni yozing (yoki «Adabiyot / Matematika namunasi» tugmasini bosing);</li>
+                <li>Studio'da matnni yozing (yoki namuna uchun «Adabiyot» / «Matematika» tugmasini bosing);</li>
                 <li>daftar turi, siyoh rangi va yozuv uslubini tanlang — natija darhol ko'rinadi;</li>
                 <li>
                   <strong>«Chatga yuborish»</strong> tugmasini bosing — varaqa shu chatga keladi.
@@ -416,11 +437,10 @@ export default function BotSetup() {
               ]}
             />
             <p>
-              Pastdagi menyuda yana <code className="font-mono text-[13px]">ℹ️ Yordam</code> (qisqa
-              qo'llanma — buyruqlar ro'yxatini ko'rsatmaydi) va{" "}
-              <code className="font-mono text-[13px]">🆔 Chat ID</code> tugmalari bor. Har bir buyruq uchun
-              tugma mavjud, shuning uchun ularni yodlash shart emas; noto'g'ri buyruq yozilsa bot butun
-              ro'yxatni tashlamaydi — faqat qisqa maslahat beradi.
+              Pastdagi menyuda yana <code className="font-mono text-[13px]">ℹ️ Yordam</code> tugmasi bor (qisqa
+              qo'llanma — buyruqlar ro'yxatini ko'rsatmaydi). Aksariyat buyruq uchun menyuda tugma mavjud,
+              shuning uchun ularni yodlash shart emas; noto'g'ri buyruq yozilsa bot butun ro'yxatni
+              tashlamaydi — faqat qisqa maslahat beradi.
             </p>
             <Badge tone="sage">Maslahat: adabiyot uchun Yo'l-yo'l + Marck Script, matematika uchun Katak + Caveat</Badge>
 
@@ -470,8 +490,8 @@ export default function BotSetup() {
               <li>
                 <strong>3-qadam — nom.</strong> Bot qiyalik, shtrix qalinligi, harflar kengligi va orasini
                 o'lchab, namunaga eng yaqin shriftni tanlaydi. So'ng uslubga nom berasiz;{" "}
-                <code className="font-mono text-[13px]">⏭ Nomsiz qoldirish</code> bosilsa u <em>«Mening
-                uslubim»</em> deb saqlanadi va darhol yoqiladi.
+                <code className="font-mono text-[13px]">⏭ Nomsiz qoldirish</code> bosilsa bot uslubga o'zi nom
+                beradi va darhol yoqadi (ro'yxatda <em>✒️ nom</em> tugmasi ko'rinishida turadi).
               </li>
             </ol>
             <p>Bo'limni ochish uchun shu buyruq ham yetadi:</p>
@@ -604,9 +624,10 @@ export default function BotSetup() {
           <StepCard index={6} title="Buyruqlar va matematika sintaksisi">
             <p className="font-semibold text-ink">Bot buyruqlari</p>
             <p>
-              Buyruqlar ishlayveradi, lekin ularni yodlash shart emas: har biri uchun menyuda tugma bor
-              va <code className="font-mono text-[13px]">ℹ️ Yordam</code> qisqa qo'llanmani ochadi. Tasodifan
-              noto'g'ri buyruq yozilsa, bot uzun ro'yxat o'rniga faqat qisqa maslahat qaytaradi.
+              Buyruqlar ishlayveradi, lekin ularni yodlash shart emas: aksariyati uchun menyuda tugma bor
+              va <code className="font-mono text-[13px]">ℹ️ Yordam</code> qisqa qo'llanmani ochadi. Chat ID faqat{" "}
+              <code className="font-mono text-[13px]">/id</code> buyrug'i bilan olinadi — menyusida bu tugma
+              yo'q. Tasodifan noto'g'ri buyruq yozilsa, bot uzun ro'yxat o'rniga faqat qisqa maslahat qaytaradi.
             </p>
             <CommandTable rows={botCommands} />
             <p className="pt-4 font-semibold text-ink">Matematika yozuvi</p>
