@@ -501,7 +501,7 @@ export default function Studio() {
             <div className="min-w-0">
               <Badge tone="marker" className="mb-2">
                 <Sparkles className="h-3.5 w-3.5" />
-                Studio — brauzerda ishlaydi, serverga yuborilmaydi
+                {miniApp.active ? "Studio — Telegram ichida ishlaydi" : "Studio — brauzerda ishlaydi"}
               </Badge>
               <h1 className="hand text-3xl leading-tight text-ink sm:text-4xl">
                 Matnni yozing — daftarga qo'lda ko'chirilgan rasm chiqadi

@@ -49,16 +49,20 @@ import {
   MINI_APP_NOTEBOOK_PATH,
   MINI_APP_PATH,
   MINI_APP_STATE_PATH,
+  MINI_APP_STYLE_PATH,
   createMiniAppHandler,
   originFromUrl,
   type MiniAppNotebookInfo,
   type MiniAppNotebookRequest,
   type MiniAppNotebookResult,
+  type MiniAppPoint,
   type MiniAppRequest,
   type MiniAppResult,
   type MiniAppSideInfo,
   type MiniAppState,
   type MiniAppStateRequest,
+  type MiniAppStyleRequest,
+  type MiniAppStyleResult,
 } from "./mini-app";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,7 +73,7 @@ import { fitToSingleSide } from "../src/lib/handwriting/fit";
 import { FALLBACK_FONT_ID, FONT_LIBRARY, fontEntry } from "../src/lib/handwriting/fonts.generated";
 import { INK_OPTIONS, PAGE_FORMAT_OPTIONS, PAPER_OPTIONS, categoryLabel, fontSupportsCyrillic } from "../src/lib/handwriting/options";
 import { fontDisplayName, fontSummary } from "../src/lib/handwriting/names";
-import { calibrateStyle, personalSummary } from "../src/lib/handwriting/calibrate";
+import { calibrateStyle, personalSummary, type CalibrationResult } from "../src/lib/handwriting/calibrate";
 import { parseFont } from "../src/lib/handwriting/font";
 import { linesPerPageFor } from "../src/lib/handwriting/layout";
 import {
@@ -1621,6 +1625,107 @@ async function miniAppPosition(chatId: number, notebook: Notebook): Promise<Mini
 }
 
 /**
+ * Mini App'dan kelgan namunani tekshiradi: faqat kutilgan ko'rinishdagi
+ * (barcha o'lchovlari son) profil qabul qilinadi — buzilgan yoki begona
+ * obyekt bilan `calibrateStyle()` ishlamasligi kerak.
+ */
+function asSampleProfile(raw: unknown): SampleProfile | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const input = raw as Record<string, unknown>;
+  const numbers = [
+    "lines",
+    "inkPixels",
+    "slant",
+    "thickness",
+    "xHeight",
+    "coverage",
+    "aspect",
+    "tracking",
+    "wobble",
+    "density",
+  ];
+  if (!numbers.every((key) => typeof input[key] === "number" && Number.isFinite(input[key] as number))) {
+    return null;
+  }
+  return raw as SampleProfile;
+}
+
+/**
+ * `POST /mini-app/style`: uslubni nusxalash Mini App'dan boshqariladi.
+ *
+ * O'lchash ishi shu yerda bajariladi: Mini App namunadan faqat raqamli
+ * profilni yuboradi, bot esa o'z shrift fayllari bilan solishtirib, eng yaqin
+ * qo'lyozmani tanlaydi (`calibrateStyle`) va uslubni saqlab, darhol yoqadi.
+ * `apply`/`remove` — saqlangan uslublarni almashtirish va o'chirish.
+ */
+async function miniAppStyle(request: MiniAppStyleRequest): Promise<MiniAppStyleResult> {
+  const chatId = request.chatId;
+  const store = await styles();
+  const settings = rawSettings(chatId);
+
+  if (request.action === "measure") {
+    const words = asSampleProfile(request.words);
+    if (!words) return { ok: false, message: "Namuna o'qilmadi — rasmni qaytadan urinib ko'ring." };
+    const digits = asSampleProfile(request.digits) ?? null;
+    const profile = mergeProfiles(words, digits);
+
+    const fonts = await fontsFor(styleFor(chatId));
+    if (Object.keys(fonts).length === 0) {
+      return { ok: false, message: "Shrift fayllari topilmadi — bot egasiga xabar bering." };
+    }
+
+    let calibration: CalibrationResult;
+    try {
+      calibration = await calibrateStyle({ profile, fonts });
+    } catch {
+      return { ok: false, message: "Namunani o'lchab bo'lmadi — yozuv aniqroq ko'rinishi kerak." };
+    }
+
+    const list = store.list(chatId);
+    const wanted = (request.name ? cleanStyleName(request.name) : null) ?? defaultStyleName(list);
+    const record = await store.create({
+      chatId,
+      name: uniqueStyleName(list, wanted),
+      baseFont: calibration.baseFont,
+      personal: calibration.personal,
+      summary: personalSummary(calibration.personal),
+    });
+    await updateSettings(chatId, { styleId: record.id });
+    return {
+      ok: true,
+      styleId: record.id,
+      name: record.name,
+      baseFont: displayName(record.baseFont),
+      summary: record.summary,
+      message: `✅ «${record.name}» uslubi saqlandi va yoqildi — eng yaqin qo'lyozma: ${displayName(
+        record.baseFont,
+      )}.`,
+    };
+  }
+
+  const record = request.styleId ? store.get(chatId, request.styleId) : undefined;
+  if (!record) return { ok: false, message: "Uslub topilmadi — ro'yxatni yangilab ko'ring." };
+
+  if (request.action === "apply") {
+    await updateSettings(chatId, { styleId: record.id });
+    return {
+      ok: true,
+      styleId: record.id,
+      name: record.name,
+      baseFont: displayName(record.baseFont),
+      summary: record.summary,
+      message: `🖋 «${record.name}» uslubi yoqildi.`,
+    };
+  }
+
+  if (!(await store.remove(chatId, record.id))) {
+    return { ok: false, message: "Uslubni o'chirib bo'lmadi. Keyinroq urinib ko'ring. 🙏" };
+  }
+  if (settings.styleId === record.id) await updateSettings(chatId, { styleId: undefined });
+  return { ok: true, styleId: null, name: null, message: `🗑 «${record.name}» uslubi o'chirildi.` };
+}
+
+/**
  * `POST /mini-app/state`: Studio yozishdan oldin daftar tanlashi va joriy
  * betni ko'rishi uchun ma'lumot. `notebookId` berilsa — o'sha daftar chatda
  * ochiq qilib qo'yiladi (botdagi «ochiq daftar» sozlamasi bilan bir xil).
@@ -1647,8 +1752,18 @@ async function miniAppState(request: MiniAppStateRequest): Promise<MiniAppState>
     active: entry.id === activeId,
   }));
 
+  // Saqlangan shaxsiy uslublar: Mini App shu ro'yxatdan uslubni almashtiradi.
+  const styleId = rawSettings(chatId).styleId ?? null;
+  const styles = (styleStore?.list(chatId) ?? []).map((record) => ({
+    id: record.id,
+    name: record.name,
+    baseFont: record.baseFont,
+    summary: record.summary,
+    active: record.id === styleId,
+  }));
+
   if (!notebook) {
-    return { notebooks, activeId: null, side: null, style: styleFor(chatId) };
+    return { notebooks, activeId: null, side: null, styles, styleId, style: styleFor(chatId) };
   }
 
   const side = await miniAppPosition(chatId, notebook);
@@ -1687,6 +1802,8 @@ async function miniAppState(request: MiniAppStateRequest): Promise<MiniAppState>
     activeId,
     side,
     ...(spread ? { spread } : {}),
+    styles,
+    styleId,
     style: notebookStyle(chatId, notebook, renderSide),
   };
 }
@@ -1865,6 +1982,68 @@ async function miniAppNotebook(request: MiniAppNotebookRequest): Promise<MiniApp
     });
     store.setActive(chatId, null);
     return { ok: true, notebookId: null, title: null, message: `🗑 «${notebook.title}» o'chirildi.` };
+  }
+
+  // `deleteRange`: botdagi ✂️ Yozuvni o'chirish oqimining to'liq ko'rinishi —
+  // boshlanish (bet/qator/so'z) va tugash nuqtalari orasidagi so'zlar
+  // o'chiriladi. Har bir betning yangi matni `applySides()` bilan saqlanadi,
+  // shu sababli ↩️ orqaga qaytarish ham ishlaydi.
+  if (request.action === "deleteRange") {
+    const validPoint = (raw: unknown): MiniAppPoint | undefined => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+      const input = raw as { side?: unknown; line?: unknown; word?: unknown };
+      const side = Number(input.side);
+      const line = Number(input.line);
+      const word = Number(input.word);
+      if (!Number.isFinite(side) || !Number.isFinite(line) || !Number.isFinite(word)) return undefined;
+      if (side < 0 || line < 1 || word < 1) return undefined;
+      return { side: Math.floor(side), line: Math.floor(line), word: Math.floor(word) };
+    };
+
+    const from = validPoint(request.from);
+    const to = validPoint(request.to);
+    if (!from || !to) return { ok: false, message: "O'chirish oralig'i noto'g'ri — qaytadan tanlang." };
+    const afterStart =
+      to.side > from.side ||
+      (to.side === from.side &&
+        (to.line > from.line || (to.line === from.line && to.word >= from.word)));
+    if (!afterStart) {
+      return { ok: false, message: "Tugash joyi boshlanishidan oldin bo'lishi mumkin emas." };
+    }
+
+    const usedSides = store.usedSides(notebook);
+    if (from.side >= usedSides) return { ok: false, message: "Tanlangan betda yozuv yo'q." };
+
+    const changes: { index: number; text: string }[] = [];
+    let removed = 0;
+    for (let side = from.side; side <= Math.min(to.side, usedSides - 1); side += 1) {
+      const text = notebook.sides[side]?.text ?? "";
+      if (text.trim().length === 0) continue;
+      const measure = await measureSide(chatId, side, text);
+      if (measure.words.length === 0) continue;
+      const rawFrom =
+        side === from.side ? (measure.lines[from.line - 1]?.wordStart ?? 0) + from.word - 1 : 0;
+      const rawTo =
+        side === to.side
+          ? (measure.lines[to.line - 1]?.wordStart ?? 0) + to.word - 1
+          : measure.words.length - 1;
+      const clampedFrom = Math.max(0, Math.min(rawFrom, measure.words.length - 1));
+      const clampedTo = Math.max(clampedFrom, Math.min(rawTo, measure.words.length - 1));
+      changes.push({ index: side, text: deleteWordRange(text, clampedFrom, clampedTo).text });
+      removed += clampedTo - clampedFrom + 1;
+    }
+
+    if (changes.length === 0 || removed === 0) {
+      return { ok: false, message: "O'chirish uchun so'z topilmadi — oraliqni tekshirib ko'ring." };
+    }
+    const applied = await store.applySides(notebook.id, changes, "oraliqni o'chirish");
+    if (!applied) return { ok: false, message: "Yozuvni o'chirib bo'lmadi. Keyinroq urinib ko'ring. 🙏" };
+    return {
+      ok: true,
+      notebookId: notebook.id,
+      title: notebook.title,
+      message: `✂️ ${removed} so'z o'chirildi (↩️ bilan qaytarish mumkin).`,
+    };
   }
 
   // `clearSide`: bitta betdagi yozuv o'chiriladi (botdagi ✂️ Yozuvni o'chirish
@@ -3957,6 +4136,7 @@ async function startHttpServer(options: { webhookBaseUrl?: string } = {}): Promi
     send: sendMiniAppText,
     state: miniAppState,
     notebook: miniAppNotebook,
+    style: miniAppStyle,
   });
 
   const server = createServer((request, response) => {
@@ -3967,7 +4147,12 @@ async function startHttpServer(options: { webhookBaseUrl?: string } = {}): Promi
       return;
     }
 
-    if (path === MINI_APP_PATH || path === MINI_APP_STATE_PATH || path === MINI_APP_NOTEBOOK_PATH) {
+    if (
+      path === MINI_APP_PATH ||
+      path === MINI_APP_STATE_PATH ||
+      path === MINI_APP_NOTEBOOK_PATH ||
+      path === MINI_APP_STYLE_PATH
+    ) {
       void handleMiniApp(request, response);
       return;
     }

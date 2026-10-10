@@ -3,12 +3,17 @@ import { AlertTriangle, ChevronLeft, ChevronRight, Loader2, RotateCcw, Scissors,
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useNotebookRender } from "@/hooks/use-notebook-render";
+import { loadFontBytes } from "@/lib/handwriting/browser";
+import { parseFont } from "@/lib/handwriting/font";
+import { FALLBACK_FONT_ID } from "@/lib/handwriting/fonts.generated";
+import { measureSideText, type SideTextMeasure } from "@/lib/handwriting/notebook-text";
 import { pageSizeFor } from "@/lib/handwriting/options";
-import { DEFAULT_STYLE } from "@/lib/handwriting/types";
+import { DEFAULT_STYLE, type NotebookStyle } from "@/lib/handwriting/types";
 import {
   fetchNotebookState,
   type MiniAppNotebookPayload,
   type MiniAppNotebookResult,
+  type MiniAppPoint,
   type MiniAppSpread,
   type MiniAppSpreadSide,
 } from "@/lib/telegram/mini-app";
@@ -30,6 +35,70 @@ export interface NotebookBookProps {
 type LoadStatus = "idle" | "loading" | "ready" | "error";
 
 /**
+ * Oraliq o'chirish oqimining qadami: boshlanish qatori/so'zi, keyin tugash
+ * qatori/so'zi. `null` — oqim boshlamagan.
+ */
+type PickStep = "startLine" | "startWord" | "endLine" | "endWord" | null;
+
+/** Tanlanayotgan qator (so'zi hali tanlanmagan). */
+interface PendingLine {
+  side: number;
+  line: number;
+}
+
+/** `a` nuqta `b` dan keyinmi (o'zi ham hisobga olinadi). */
+function afterPoint(a: MiniAppPoint, b: MiniAppPoint): boolean {
+  if (a.side !== b.side) return a.side > b.side;
+  if (a.line !== b.line) return a.line > b.line;
+  return a.word >= b.word;
+}
+
+/** Nuqtani o'qiladigan ko'rinishga keltiradi: «2-bet 3-qator 1-so'z». */
+function pointText(point: MiniAppPoint): string {
+  return `${point.side + 1}-bet ${point.line}-qator ${point.word}-so'z`;
+}
+
+/**
+ * Betdagi qator va so'z tuzilishini o'lchaydi (bot bilan bir xil yo'l:
+ * o'sha shrift, o'sha uslub). Rasm chizishdan oldin shrift fayli yuklanadi.
+ */
+function useSideMeasure(text: string, style: NotebookStyle): SideTextMeasure | null {
+  const [measure, setMeasure] = useState<SideTextMeasure | null>(null);
+  const key = `${style.font ?? FALLBACK_FONT_ID}\u0000${style.pageFormat}\u0000${style.lineGap}\u0000${text}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (text.trim().length === 0) {
+      setMeasure(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void (async () => {
+      try {
+        const id = style.font ?? FALLBACK_FONT_ID;
+        const bytes = await loadFontBytes(id);
+        if (cancelled) return;
+        const primary = parseFont(id, bytes);
+        if (cancelled) return;
+        setMeasure(measureSideText({ text, style, primary }));
+      } catch {
+        if (!cancelled) setMeasure(null);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // `key` o'lchovga ta'sir qiladigan hamma narsani (shrift, uslub, matn)
+    // o'z ichiga oladi.
+  }, [key]);
+
+  return measure;
+}
+
+/**
  * Mini App'dagi **kitob ko'rinishi**: daftar ochilgan holda ikki bet — chap va
  * o'ng — muqova o'rtasidan birlashtirilib ko'rsatiladi.
  *
@@ -38,6 +107,10 @@ type LoadStatus = "idle" | "loading" | "ready" | "error";
  *
  * Strelkalar ataylab xira (`bg-paper/70`, `text-ink/40`): ular bet chetida
  * turadi va to'liq tiniq bo'lsa betdagi yozuvning chekkasini to'sib qo'yardi.
+ *
+ * Betdagi yozuvni ikki yo'l bilan o'chirish mumkin: butun betni («Tozalash»)
+ * yoki tanlangan oraliqni (qatordan-so'zga) — ikkinchisi botdagi ✂️ Yozuvni
+ * o'chirish oqimi bilan bir xil, faqat shu yerda bajariladi.
  */
 export function NotebookBook({ notebookId, title, onManage, busy, refreshKey }: NotebookBookProps) {
   const [spreadIndex, setSpreadIndex] = useState(0);
@@ -48,11 +121,23 @@ export function NotebookBook({ notebookId, title, onManage, busy, refreshKey }: 
   const [outcome, setOutcome] = useState<{ ok: boolean; message: string } | null>(null);
   const [reloadTick, setReloadTick] = useState(0);
 
+  // Oraliq o'chirish: qadam, tanlangan nuqtalar va qator ichidagi so'z tanlovi.
+  const [step, setStep] = useState<PickStep>(null);
+  const [pending, setPending] = useState<PendingLine | null>(null);
+  const [from, setFrom] = useState<MiniAppPoint | null>(null);
+  const [to, setTo] = useState<MiniAppPoint | null>(null);
+  const [pickHint, setPickHint] = useState<string | null>(null);
+
   // Daftar almashsa — kitob boshidan ochiladi.
   useEffect(() => {
     setSpreadIndex(0);
     setArmed(null);
     setOutcome(null);
+    setStep(null);
+    setPending(null);
+    setFrom(null);
+    setTo(null);
+    setPickHint(null);
   }, [notebookId]);
 
   // Kitob ochilgan ko'rinishini botdan o'qiymiz (har bet o'z uslubi bilan).
@@ -127,11 +212,104 @@ export function NotebookBook({ notebookId, title, onManage, busy, refreshKey }: 
     [notebookId, onManage],
   );
 
+  const startRange = useCallback(() => {
+    setArmed(null);
+    setOutcome(null);
+    setPickHint(null);
+    setPending(null);
+    setFrom(null);
+    setTo(null);
+    setStep("startLine");
+  }, []);
+
+  const cancelRange = useCallback(() => {
+    setStep(null);
+    setPending(null);
+    setFrom(null);
+    setTo(null);
+    setPickHint(null);
+  }, []);
+
+  /** Qator tanlandi: boshlanish bo'lsa — so'z tanlashga, tugash bo'lsa — oraliqni tekshirib. */
+  const pickLine = useCallback(
+    (sideIndex: number, line: number) => {
+      if (step === "startLine") {
+        setPending({ side: sideIndex, line });
+        setStep("startWord");
+        setPickHint(null);
+        return;
+      }
+      if (step === "endLine") {
+        const candidate: MiniAppPoint = { side: sideIndex, line, word: 1 };
+        if (from && !afterPoint(candidate, from)) {
+          setPickHint("Tugash joyi boshlanishidan oldin bo'lmaydi — boshqa qatorni tanlang.");
+          return;
+        }
+        setPending({ side: sideIndex, line });
+        setStep("endWord");
+        setPickHint(null);
+      }
+    },
+    [step, from],
+  );
+
+  /** So'z tanlandi: ikkala nuqta ham to'lsa — tasdiqlash ko'rsatiladi. */
+  const pickWord = useCallback(
+    (sideIndex: number, line: number, word: number) => {
+      const point: MiniAppPoint = { side: sideIndex, line, word };
+      if (step === "startWord") {
+        setFrom(point);
+        setPending(null);
+        setStep("endLine");
+        setPickHint(null);
+        return;
+      }
+      if (step === "endWord") {
+        if (from && !afterPoint(point, from)) {
+          setPickHint("Tugash so'zi boshlanishidan oldin bo'lmaydi — boshqa so'zni tanlang.");
+          return;
+        }
+        setTo(point);
+        setPending(null);
+        setStep(null);
+      }
+    },
+    [step, from],
+  );
+
+  const submitRange = useCallback(async () => {
+    if (!notebookId || !from || !to) return;
+    const result = await onManage({ action: "deleteRange", notebookId, from, to });
+    setOutcome({ ok: result.ok, message: result.message });
+    if (result.ok) {
+      setFrom(null);
+      setTo(null);
+      setPickHint(null);
+      setReloadTick((prev) => prev + 1);
+    }
+  }, [notebookId, from, to, onManage]);
+
+  const stepHint = useMemo(() => {
+    if (step === "startLine") return "Boshlanish: betdagi qator raqamini bosing.";
+    if (step === "startWord")
+      return pending
+        ? `Boshlanish: ${pending.side + 1}-betning ${pending.line}-qatoridagi so'zni bosing.`
+        : "Boshlanish qatoridagi so'zni bosing.";
+    if (step === "endLine") return "Tugash: betdagi qator raqamini bosing.";
+    if (step === "endWord")
+      return pending
+        ? `Tugash: ${pending.side + 1}-betning ${pending.line}-qatoridagi so'zni bosing.`
+        : "Tugash qatoridagi so'zni bosing.";
+    return null;
+  }, [step, pending]);
+
   const hint = useMemo(() => {
     if (!notebookId) return "Kitobni ko'rish uchun yuqoridan daftar tanlang.";
     if (status === "error") return message ?? "Kitobni ochib bo'lmadi.";
     return null;
   }, [notebookId, status, message]);
+
+  const rangeActive = step !== null || from !== null || to !== null;
 
   return (
     <Card className="bg-white/70">
@@ -139,7 +317,8 @@ export function NotebookBook({ notebookId, title, onManage, busy, refreshKey }: 
         <CardTitle className="hand text-2xl">Kitob ko&apos;rinishi</CardTitle>
         <CardDescription>
           Daftar ochiq holda: chap va o&apos;ng bet bir joydan birlashtirilgan. Yon
-          tomonlardagi xira strelkalar bilan varaqlaysiz.
+          tomonlardagi xira strelkalar bilan varaqlaysiz; yozuvning bir qismini
+          &laquo;Oraliqni o&apos;chirish&raquo; bilan tanlab o&apos;chirasiz.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -170,6 +349,67 @@ export function NotebookBook({ notebookId, title, onManage, busy, refreshKey }: 
               </span>
             </div>
 
+            {/* Oraliqni o'chirish boshqaruvi. */}
+            <div className="space-y-2 rounded-xl border border-paper-edge bg-white/60 p-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                {!rangeActive && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || !spread}
+                    onClick={startRange}
+                  >
+                    <Scissors className="h-4 w-4" />
+                    Oraliqni o&apos;chirish
+                  </Button>
+                )}
+                {stepHint && <span className="text-xs text-pencil/75">{stepHint}</span>}
+                {rangeActive && (
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={cancelRange}>
+                    <X className="h-4 w-4" />
+                    Bekor qilish
+                  </Button>
+                )}
+              </div>
+
+              {from && (
+                <p className="text-[11px] leading-relaxed text-pencil/75">
+                  <span className="font-semibold text-ink">Boshlanish:</span> {pointText(from)}
+                  {to && (
+                    <>
+                      {" · "}
+                      <span className="font-semibold text-ink">Tugash:</span> {pointText(to)}
+                    </>
+                  )}
+                </p>
+              )}
+
+              {from && to && (
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="default" size="sm" disabled={busy} onClick={() => void submitRange()}>
+                    {busy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Scissors className="h-3.5 w-3.5" />
+                    )}
+                    Ha, o&apos;chirish
+                  </Button>
+                  <Button variant="ghost" size="sm" disabled={busy} onClick={cancelRange}>
+                    <X className="h-3.5 w-3.5" />
+                    Yo&apos;q
+                  </Button>
+                </div>
+              )}
+
+              {pickHint && <p className="text-[11px] leading-relaxed text-margin">{pickHint}</p>}
+              {!rangeActive && (
+                <p className="text-[11px] leading-relaxed text-pencil/65">
+                  Tugmani bosib, boshlanish (qator → so&apos;z) va tugash joyini tanlaysiz; so&apos;zlar
+                  tayyor tugmalar bo&apos;lib chiqadi.
+                </p>
+              )}
+            </div>
+
             <div className="relative mx-auto w-full max-w-[460px] rounded-2xl border border-paper-edge bg-paper-deep/60 p-1.5 shadow-paper">
               <div className="relative grid grid-cols-2 overflow-hidden rounded-xl">
                 <BookHalf
@@ -179,6 +419,12 @@ export function NotebookBook({ notebookId, title, onManage, busy, refreshKey }: 
                   busy={busy}
                   onArm={setArmed}
                   onClear={clearSide}
+                  step={step}
+                  pending={pending}
+                  from={from}
+                  to={to}
+                  onPickLine={pickLine}
+                  onPickWord={pickWord}
                 />
                 <BookHalf
                   side={spread?.right ?? null}
@@ -187,6 +433,12 @@ export function NotebookBook({ notebookId, title, onManage, busy, refreshKey }: 
                   busy={busy}
                   onArm={setArmed}
                   onClear={clearSide}
+                  step={step}
+                  pending={pending}
+                  from={from}
+                  to={to}
+                  onPickLine={pickLine}
+                  onPickWord={pickWord}
                 />
                 {/* Muqova o'rtasi: ikki betni birlashtirib turadigan soya. */}
                 <span className="pointer-events-none absolute inset-y-0 left-1/2 w-4 -translate-x-1/2 bg-gradient-to-r from-ink/10 via-ink/25 to-ink/10" />
@@ -252,19 +504,53 @@ interface BookHalfProps {
   busy: boolean;
   onArm: (sideIndex: number | null) => void;
   onClear: (side: MiniAppSpreadSide) => Promise<void>;
+  /** Oraliq tanlash qadami (boshlamagan bo'lsa — `null`). */
+  step: PickStep;
+  /** So'zi tanlanayotgan qator (qaysi betda ekani bilan). */
+  pending: PendingLine | null;
+  from: MiniAppPoint | null;
+  to: MiniAppPoint | null;
+  onPickLine: (sideIndex: number, line: number) => void;
+  onPickWord: (sideIndex: number, line: number, word: number) => void;
 }
 
 /**
- * Kitobning bir tomoni: bet rasmi (yoki bo'sh varaqa) va uning oyog'i
- * (bet raqami + yozuvni o'chirish). `useNotebookRender` — hook, shu sababli
- * har bet alohida komponentda chiziladi (hooklar tsikl ichida chaqirilmaydi).
+ * Kitobning bir tomoni: bet rasmi (yoki bo'sh varaqa), oyog'i (bet raqami +
+ * yozuvni o'chirish) va — oraliq tanlanayotganda — qator/so'z tugmalari.
+ *
+ * `useNotebookRender` va `useSideMeasure` — hooklar, shu sababli har bet
+ * alohida komponentda chiziladi (hooklar tsikl ichida chaqirilmaydi).
  */
-function BookHalf({ side, pageNumber, armed, busy, onArm, onClear }: BookHalfProps) {
-  const style = { ...DEFAULT_STYLE, ...(side?.style ?? {}) };
+function BookHalf({
+  side,
+  pageNumber,
+  armed,
+  busy,
+  onArm,
+  onClear,
+  step,
+  pending,
+  from,
+  to,
+  onPickLine,
+  onPickWord,
+}: BookHalfProps) {
+  const style: NotebookStyle = { ...DEFAULT_STYLE, ...(side?.style ?? {}) };
   const size = pageSizeFor(style.pageFormat);
   const rendered = useNotebookRender(side?.text ?? "", style);
   const page = rendered.pages[0];
-  const hasText = (side?.text ?? "").trim().length > 0;
+  const text = side?.text ?? "";
+  const hasText = text.trim().length > 0;
+  const measure = useSideMeasure(text, style);
+
+  // Bet indeksi: `side` bo'lmasa — `-1` (solishtirish hech qachon mos kelmaydi).
+  const sideIndex = side?.index ?? -1;
+  const pickingLine = step === "startLine" || step === "endLine";
+  const pickingWord =
+    pending !== null && pending.side === sideIndex && (step === "startWord" || step === "endWord");
+  const linesWithWords = (measure?.lines ?? []).filter((line) => line.words.length > 0);
+  const pendingWords = pending && measure ? (measure.lines[pending.line - 1]?.words ?? []) : [];
+  const marksThisSide = from?.side === sideIndex || to?.side === sideIndex;
 
   return (
     <div className="flex flex-col bg-paper">
@@ -282,6 +568,88 @@ function BookHalf({ side, pageNumber, armed, busy, onArm, onClear }: BookHalfPro
           />
         )}
       </div>
+
+      {(pickingLine || pickingWord) && side !== null && (
+        <div className="border-t border-paper-edge/70 bg-white/70 px-2 py-1.5">
+          {pickingLine && (
+            <>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-pencil/60">
+                Qatorni tanlang
+              </p>
+              {linesWithWords.length === 0 ? (
+                <p className="mt-1 text-[11px] leading-relaxed text-pencil/65">
+                  Bu betda yozuv yo&apos;q — boshqa betdan tanlang.
+                </p>
+              ) : (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {linesWithWords.map((line) => {
+                    const isFrom = from?.side === sideIndex && from.line === line.index;
+                    const isTo = to?.side === sideIndex && to.line === line.index;
+                    return (
+                      <button
+                        key={line.index}
+                        type="button"
+                        disabled={busy}
+                        title={`${line.index}-qator`}
+                        onClick={() => onPickLine(sideIndex, line.index)}
+                        className={cn(
+                          "min-w-[1.75rem] rounded-lg border px-1.5 py-1 text-[11px] font-semibold transition-colors disabled:opacity-40",
+                          isFrom && "border-marker bg-marker/25 text-ink ring-1 ring-marker/60",
+                          isTo && "border-margin bg-margin-soft/50 text-margin",
+                          !isFrom && !isTo && "border-ink/15 bg-white text-ink/70 hover:border-ink/35",
+                        )}
+                      >
+                        {line.index}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+
+          {pickingWord && pending && (
+            <>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-pencil/60">
+                {pending.line}-qatordagi so&apos;zni tanlang
+              </p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {pendingWords.map((word, index) => {
+                  const wordNumber = index + 1;
+                  const isFrom =
+                    from?.side === sideIndex && from.line === pending.line && from.word === wordNumber;
+                  const isTo = to?.side === sideIndex && to.line === pending.line && to.word === wordNumber;
+                  return (
+                    <button
+                      key={`${pending.line}-${wordNumber}`}
+                      type="button"
+                      disabled={busy}
+                      title={word}
+                      onClick={() => onPickWord(sideIndex, pending.line, wordNumber)}
+                      className={cn(
+                        "max-w-[7rem] truncate rounded-lg border px-1.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-40",
+                        isFrom && "border-marker bg-marker/25 text-ink ring-1 ring-marker/60",
+                        isTo && "border-margin bg-margin-soft/50 text-margin",
+                        !isFrom && !isTo && "border-ink/15 bg-white text-ink/70 hover:border-ink/35",
+                      )}
+                    >
+                      {wordNumber} {word}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {side !== null && marksThisSide && (
+        <p className="border-t border-paper-edge/70 bg-white/50 px-2 py-1 text-[10px] leading-relaxed text-pencil/70">
+          {from?.side === sideIndex && <span className="text-ink">◆ {pointText(from)}</span>}
+          {from?.side === sideIndex && to?.side === sideIndex && " · "}
+          {to?.side === sideIndex && <span className="text-margin">◇ {pointText(to)}</span>}
+        </p>
+      )}
 
       <div className="mt-auto flex flex-wrap items-center justify-between gap-1 border-t border-paper-edge/70 px-2 py-1.5">
         <span className="text-[11px] font-semibold text-pencil/70">{pageNumber}-bet</span>

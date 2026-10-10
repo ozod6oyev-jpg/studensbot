@@ -147,6 +147,15 @@ export const MINI_APP_NOTEBOOK_ENDPOINT =
   "/mini-app/notebook";
 
 /**
+ * Shaxsiy uslub manzili (namunani o'lchash, uslubni yoqish/o'chirish).
+ * Boshqa domendagi bot uchun:
+ * `VITE_MINI_APP_STYLE_ENDPOINT=https://bot.example.com/mini-app/style`
+ */
+export const MINI_APP_STYLE_ENDPOINT =
+  (import.meta.env.VITE_MINI_APP_STYLE_ENDPOINT as string | undefined)?.trim() ||
+  "/mini-app/style";
+
+/**
  * Yuboriladigan matnning eng katta uzunligi.
  *
  * Botdagi `MAX_MINI_APP_CHARS` bilan **bir xil** bo'lishi kerak: chegaradan uzun
@@ -292,7 +301,19 @@ export type MiniAppNotebookAction =
   | "undo"
   | "book"
   /** Bitta betdagi yozuvni o'chirish (kitob ko'rinishidan). */
-  | "clearSide";
+  | "clearSide"
+  /** Betlar/qatorlar/so'zlar bo'yicha oraliqni o'chirish. */
+  | "deleteRange";
+
+/** O'chirish oralig'ining bir nuqtasi (hammasi 1 dan boshlanadi). */
+export interface MiniAppPoint {
+  /** Bet indeksi (0 dan boshlanadi). */
+  side: number;
+  /** Qator raqami (1 dan). */
+  line: number;
+  /** Qatordagi so'z raqami (1 dan). */
+  word: number;
+}
 
 /** `manageNotebook()` uchun so'rov: amal va unga kerakli maydonlar. */
 export interface MiniAppNotebookPayload {
@@ -307,6 +328,10 @@ export interface MiniAppNotebookPayload {
   paper?: PaperType;
   /** Qaysi betdagi yozuv o'chiriladi (`clearSide`): 0 dan boshlanadi. */
   sideIndex?: number;
+  /** Oraliq boshlanishi (`deleteRange`). */
+  from?: MiniAppPoint;
+  /** Oraliq tugashi (`deleteRange`). */
+  to?: MiniAppPoint;
 }
 
 export interface MiniAppNotebookResult {
@@ -373,12 +398,26 @@ export interface MiniAppSpread {
   capacity: number;
 }
 
+/** Chatdagi saqlangan shaxsiy uslub (qisqa ko'rinish). */
+export interface MiniAppStyleInfo {
+  id: string;
+  name: string;
+  baseFont: string;
+  summary: string;
+  /** Hozir yoqilgan uslubmi. */
+  active: boolean;
+}
+
 export interface MiniAppState {
   notebooks: MiniAppNotebook[];
   activeId: string | null;
   side: MiniAppSide | null;
   /** Daftar ochiq ko'rinishda — faqat `spreadIndex` so'ralganda keladi. */
   spread: MiniAppSpread | null;
+  /** Chatdagi saqlangan uslublar (Mini App'da uslubni almashtirish uchun). */
+  styles: MiniAppStyleInfo[];
+  /** Yoqilgan uslub id'si (bo'lmasa — `null`). */
+  styleId: string | null;
   style: Partial<NotebookStyle>;
 }
 
@@ -572,6 +611,23 @@ export async function fetchNotebookState(
   }
 
   const notebooks = body?.notebooks;
+  const rawStyles = (body as { styles?: unknown } | null)?.styles;
+  const styles: MiniAppStyleInfo[] = Array.isArray(rawStyles)
+    ? rawStyles.flatMap((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+        const item = entry as Record<string, unknown>;
+        if (typeof item.id !== "string" || typeof item.name !== "string") return [];
+        return [
+          {
+            id: item.id,
+            name: item.name,
+            baseFont: typeof item.baseFont === "string" ? item.baseFont : "",
+            summary: typeof item.summary === "string" ? item.summary : "",
+            active: item.active === true,
+          },
+        ];
+      })
+    : [];
   const rawSpread = (body as { spread?: unknown } | null)?.spread;
   const spread: MiniAppSpread | null =
     rawSpread && typeof rawSpread === "object" && !Array.isArray(rawSpread)
@@ -604,6 +660,8 @@ export async function fetchNotebookState(
       activeId: typeof body?.activeId === "string" ? body.activeId : null,
       side: body?.side ?? null,
       spread,
+      styles,
+      styleId: typeof body?.styleId === "string" ? body.styleId : null,
       style: sanitizeStyle(body?.style),
     },
   };
@@ -646,6 +704,8 @@ export async function manageNotebook(
         ...(typeof payload.sideIndex === "number" && payload.sideIndex >= 0
           ? { sideIndex: Math.floor(payload.sideIndex) }
           : {}),
+        ...(payload.from ? { from: payload.from } : {}),
+        ...(payload.to ? { to: payload.to } : {}),
       }),
       signal: AbortSignal.timeout(NOTEBOOK_TIMEOUT_MS),
     });
@@ -681,6 +741,112 @@ export async function manageNotebook(
     message: body.message ?? "✅ Bajarildi.",
     notebookId: body.notebookId ?? null,
     title: body.title ?? null,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Shaxsiy uslub (uslubni nusxalash)                                    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Mini App'dan chaqiriladigan uslub amali.
+ *
+ * `measure` — namunadan o'lchangan profil yuboriladi va bot uni o'z shrift
+ * fayllari bilan solishtirib, eng yaqin qo'lyozmani tanlab, shaxsiy uslub
+ * yasaydi (o'lchash ishi to'liq serverda — brauzerda shrift fayllari kerak
+ * bo'lmaydi). `apply` — saqlangan uslubni yoqish, `remove` — o'chirish.
+ */
+export type MiniAppStyleAction = "measure" | "apply" | "remove";
+
+/** `measure` uchun namunadan hisoblangan profil (sonlar, `SampleProfile`). */
+export type MiniAppSampleProfile = Record<string, unknown>;
+
+export interface MiniAppStylePayload {
+  action: MiniAppStyleAction;
+  /** `measure`: so'zlardan hisoblangan profil. */
+  words?: MiniAppSampleProfile;
+  /** `measure`: raqamlardan hisoblangan profil (ixtiyoriy). */
+  digits?: MiniAppSampleProfile | null;
+  /** `measure`: uslub nomi (bo'sh bo'lsa — standart nom). */
+  name?: string;
+  /** `apply`/`remove`: qaysi uslub. */
+  styleId?: string;
+}
+
+export interface MiniAppStyleResult {
+  ok: boolean;
+  message: string;
+  /** `measure` natijasi: saqlangan uslub haqida qisqa ma'lumot. */
+  styleId?: string | null;
+  name?: string | null;
+  baseFont?: string | null;
+  summary?: string | null;
+}
+
+/**
+ * Shaxsiy uslub amalini botga yuboradi (o'lchash, yoqish, o'chirish).
+ * Xatolar ham natija sifatida qaytariladi — UI yiqilmaydi.
+ */
+export async function manageStyle(payload: MiniAppStylePayload): Promise<MiniAppStyleResult> {
+  const app = getTelegramWebApp();
+  const initData = app?.initData ?? "";
+
+  if (!initData) {
+    return {
+      ok: false,
+      message: "Bu bo'lim faqat Telegram ichida ishlaydi. Bot menyusidagi «Studio» tugmasi bilan kiring.",
+    };
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(MINI_APP_STYLE_ENDPOINT, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        initData,
+        action: payload.action,
+        ...(payload.words ? { words: payload.words } : {}),
+        ...(payload.digits ? { digits: payload.digits } : {}),
+        ...(payload.name ? { name: payload.name } : {}),
+        ...(payload.styleId ? { styleId: payload.styleId } : {}),
+      }),
+      signal: AbortSignal.timeout(NOTEBOOK_TIMEOUT_MS),
+    });
+  } catch {
+    return {
+      ok: false,
+      message: "Bot serveriga ulanib bo'lmadi. Internetni tekshirib, qaytadan urinib ko'ring.",
+    };
+  }
+
+  let body: (Partial<MiniAppStyleResult> & { error?: string }) | null = null;
+  try {
+    body = (await response.json()) as Partial<MiniAppStyleResult> & { error?: string };
+  } catch {
+    body = null;
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    return {
+      ok: false,
+      message: "Telegram ma'lumotlari eskirgan. Studio'ni yopib, botdan qaytadan oching.",
+    };
+  }
+  if (!response.ok || body?.ok !== true) {
+    return {
+      ok: false,
+      message: body?.message ?? body?.error ?? `Amal bajarilmadi (HTTP ${response.status}).`,
+    };
+  }
+
+  return {
+    ok: true,
+    message: body.message ?? "✅ Bajarildi.",
+    styleId: body.styleId ?? null,
+    name: body.name ?? null,
+    baseFont: body.baseFont ?? null,
+    summary: body.summary ?? null,
   };
 }
 

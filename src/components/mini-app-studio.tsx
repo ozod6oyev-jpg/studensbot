@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { FontGallery } from "@/components/font-gallery";
 import { MiniAppWriter } from "@/components/mini-app-writer";
+import { StyleCopy } from "@/components/style-copy";
 import { NotebookBook } from "@/components/notebook-book";
 import { Button } from "@/components/ui/button";
 import { Badge, Segmented, Slider, Switch } from "@/components/ui/controls";
@@ -665,6 +666,15 @@ export const MiniAppStudio = memo(function MiniAppStudio({
             <Group title="Yozuv uslubi">
               <FontGallery value={style.font} onChange={pickFont} onPreset={onPreset} />
             </Group>
+
+            {/* O'z qo'lyozmangizni nusxalash: namuna Studio'da o'lchanadi, */}
+            {/* uslubni bot saqlaydi (shrift fayllari u yerda). */}
+            <StyleCopy
+              styles={miniApp.state.state?.styles ?? []}
+              styleId={miniApp.state.state?.styleId ?? null}
+              busy={miniApp.notebookBusy}
+              onReload={() => void miniApp.reloadState()}
+            />
 
             <Group title="Siyoh rangi">
               <div className="flex flex-wrap gap-2">

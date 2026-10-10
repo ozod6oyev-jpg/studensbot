@@ -27,7 +27,16 @@ export const MINI_APP_STATE_PATH = "/mini-app/state";
 /** Daftar bilan ishlash: yaratish, nomlash, o'chirish, orqaga qaytarish, PDF. */
 export const MINI_APP_NOTEBOOK_PATH = "/mini-app/notebook";
 /** Mini App'dan chaqiriladigan daftar amallari. */
-export type MiniAppNotebookAction = "create" | "rename" | "remove" | "undo" | "book" | "clearSide";
+export type MiniAppNotebookAction =
+  | "create"
+  | "rename"
+  | "remove"
+  | "undo"
+  | "book"
+  /** Bitta betdagi yozuvni o'chirish. */
+  | "clearSide"
+  /** Betlar/qatorlar/so'zlar bo'yicha oraliqni o'chirish. */
+  | "deleteRange";
 export const MINI_APP_NOTEBOOK_ACTIONS: MiniAppNotebookAction[] = [
   "create",
   "rename",
@@ -35,7 +44,12 @@ export const MINI_APP_NOTEBOOK_ACTIONS: MiniAppNotebookAction[] = [
   "undo",
   "book",
   "clearSide",
+  "deleteRange",
 ];
+/** Shaxsiy uslub: o'lchash, yoqish, o'chirish. */
+export const MINI_APP_STYLE_PATH = "/mini-app/style";
+export type MiniAppStyleAction = "measure" | "apply" | "remove";
+export const MINI_APP_STYLE_ACTIONS: MiniAppStyleAction[] = ["measure", "apply", "remove"];
 export const HEALTH_PATH = "/healthz";
 /** `initData` shu vaqtdan eski bo'lsa qabul qilinmaydi (o'g'irlangan ma'lumot uchun). */
 export const MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60;
@@ -148,6 +162,15 @@ export interface MiniAppSpread {
   capacity: number;
 }
 
+/** Chatdagi saqlangan shaxsiy uslub (Mini App ro'yxati uchun). */
+export interface MiniAppStyleInfo {
+  id: string;
+  name: string;
+  baseFont: string;
+  summary: string;
+  active: boolean;
+}
+
 /** `POST /mini-app/state` javobi. */
 export interface MiniAppState {
   notebooks: MiniAppNotebookInfo[];
@@ -155,6 +178,10 @@ export interface MiniAppState {
   side: MiniAppSideInfo | null;
   /** Daftar ochiq ko'rinishda (ikki bet) — faqat `spreadIndex` so'ralganda. */
   spread?: MiniAppSpread | null;
+  /** Saqlangan shaxsiy uslublar (uslubni almashtirish uchun). */
+  styles: MiniAppStyleInfo[];
+  /** Yoqilgan uslub id'si (bo'lmasa — `null`). */
+  styleId: string | null;
   /** Chat uslubi (daftar bo'lsa — o'sha daftarning qog'ozi bilan). */
   style: unknown;
 }
@@ -182,6 +209,48 @@ export interface MiniAppNotebookRequest {
   paper?: unknown;
   /** `clearSide` uchun bet indeksi (0 dan boshlanadi). */
   sideIndex?: unknown;
+  /** `deleteRange` uchun oraliq chegaralari (1 dan boshlanadigan qator/so'z). */
+  from?: unknown;
+  to?: unknown;
+}
+
+/** O'chirish oralig'ining bir nuqtasi (bet indeksi 0 dan, qator/so'z 1 dan). */
+export interface MiniAppPoint {
+  side: number;
+  line: number;
+  word: number;
+}
+
+/**
+ * `POST /mini-app/style` so'rovi — shaxsiy uslub (uslubni nusxalash).
+ *
+ * O'lchash ishi botda bajariladi: Mini App namunadan faqat raqamli profilni
+ * (sonlar) yuboradi, bot esa o'z shrift fayllari bilan solishtirib, eng yaqin
+ * qo'lyozmani tanlaydi va uslubni saqlaydi — shunda brauzerga shrift fayllarini
+ * yuklash shart bo'lmaydi.
+ */
+export interface MiniAppStyleRequest {
+  chatId: number;
+  user?: MiniAppUser;
+  action: MiniAppStyleAction;
+  /** `measure`: so'zlar namunasidan hisoblangan profil (tekshirish chaqiruvchi tomonda). */
+  words?: unknown;
+  /** `measure`: raqamlar namunasidan hisoblangan profil. */
+  digits?: unknown;
+  /** `measure`: uslub nomi (bo'sh bo'lsa — bot o'zi nom beradi). */
+  name?: string;
+  /** `apply`/`remove`: qaysi saqlangan uslub. */
+  styleId?: string;
+}
+
+/** `POST /mini-app/style` javobi. */
+export interface MiniAppStyleResult {
+  ok: boolean;
+  message: string;
+  styleId?: string | null;
+  name?: string | null;
+  baseFont?: string | null;
+  summary?: string | null;
 }
 
 /** `POST /mini-app/notebook` javobi (xato ham shu ko'rinishda qaytadi). */
@@ -226,6 +295,10 @@ export interface MiniAppHandlerOptions {
    * bilan javob oladi (Studio faqat yozishni taklif qiladi).
    */
   notebook?: (request: MiniAppNotebookRequest) => Promise<MiniAppNotebookResult>;
+  /**
+   * Shaxsiy uslub (`POST /mini-app/style`). Berilmasa, bu yo'l 503 qaytaradi.
+   */
+  style?: (request: MiniAppStyleRequest) => Promise<MiniAppStyleResult>;
   /**
    * CORS uchun ruxsat etilgan manbalar (masalan, `MINI_APP_URL` domeni).
    * Bo'sh bo'lsa har qanday manba javobni o'qiy oladi — xavfsizlikni
@@ -381,6 +454,7 @@ export function createMiniAppHandler(
     const path = (request.url ?? "").split("?")[0];
     const isState = path === MINI_APP_STATE_PATH;
     const isNotebook = path === MINI_APP_NOTEBOOK_PATH;
+    const isStyle = path === MINI_APP_STYLE_PATH;
     const origin = originOf(request.headers.origin);
     const originAllowed = !origin || allowed.length === 0 || allowed.includes(origin);
     const cors: Record<string, string> = originAllowed && origin
@@ -410,6 +484,12 @@ export function createMiniAppHandler(
       paper?: unknown;
       sideIndex?: unknown;
       spreadIndex?: unknown;
+      words?: unknown;
+      digits?: unknown;
+      styleId?: unknown;
+      name?: unknown;
+      from?: unknown;
+      to?: unknown;
     };
     try {
       const raw = await readBody(request);
@@ -452,6 +532,17 @@ export function createMiniAppHandler(
       typeof payload.sideIndex === "number" && Number.isFinite(payload.sideIndex) && payload.sideIndex >= 0
         ? Math.floor(payload.sideIndex)
         : undefined;
+    // O'chirish oralig'i nuqtasi: bet 0 dan, qator va so'z 1 dan boshlanadi.
+    const point = (raw: unknown): MiniAppPoint | undefined => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+      const input = raw as { side?: unknown; line?: unknown; word?: unknown };
+      const side = typeof input.side === "number" ? input.side : NaN;
+      const line = typeof input.line === "number" ? input.line : NaN;
+      const word = typeof input.word === "number" ? input.word : NaN;
+      if (!Number.isFinite(side) || !Number.isFinite(line) || !Number.isFinite(word)) return undefined;
+      if (side < 0 || line < 1 || word < 1) return undefined;
+      return { side: Math.floor(side), line: Math.floor(line), word: Math.floor(word) };
+    };
 
     // Holat so'rovi: daftarlar ro'yxati va joriy bet (matn talab qilinmaydi).
     if (isState) {
@@ -465,6 +556,62 @@ export function createMiniAppHandler(
       } catch (error) {
         log(`Mini App: holat so'rovida xato — ${(error as Error).message}`);
         sendJson(response, 500, { ok: false, error: "holat olinmadi" }, cors);
+      }
+      return;
+    }
+
+    // Shaxsiy uslub: o'lchash, yoqish, o'chirish (uslubni nusxalash).
+    if (isStyle) {
+      if (!options.style) {
+        sendJson(response, 503, { ok: false, error: "uslub xizmati yoqilmagan" }, cors);
+        return;
+      }
+      const action = typeof payload.action === "string" ? payload.action.trim() : "";
+      if (!MINI_APP_STYLE_ACTIONS.includes(action as MiniAppStyleAction)) {
+        sendJson(
+          response,
+          400,
+          { ok: false, error: "noma'lum amal", message: "Bu amal qo'llab-quvvatlanmaydi." },
+          cors,
+        );
+        return;
+      }
+      const styleId =
+        typeof payload.styleId === "string" && payload.styleId.trim().length > 0
+          ? payload.styleId.trim()
+          : undefined;
+      const name = typeof payload.name === "string" ? payload.name.trim().slice(0, 60) : undefined;
+      try {
+        const result = await options.style({
+          chatId,
+          user: check.user,
+          action: action as MiniAppStyleAction,
+          ...(payload.words ? { words: payload.words } : {}),
+          ...(payload.digits ? { digits: payload.digits } : {}),
+          ...(name ? { name } : {}),
+          ...(styleId ? { styleId } : {}),
+        });
+        sendJson(
+          response,
+          result.ok ? 200 : 400,
+          {
+            ok: result.ok,
+            message: result.message,
+            styleId: result.styleId ?? null,
+            name: result.name ?? null,
+            baseFont: result.baseFont ?? null,
+            summary: result.summary ?? null,
+          },
+          cors,
+        );
+      } catch (error) {
+        log(`Mini App: uslub amalida xato — ${(error as Error).message}`);
+        sendJson(
+          response,
+          500,
+          { ok: false, error: "uslub amali bajarilmadi", message: "Uslub amali bajarilmadi — keyinroq urinib ko'ring." },
+          cors,
+        );
       }
       return;
     }
@@ -499,6 +646,8 @@ export function createMiniAppHandler(
           sheets: payload.sheets,
           paper: payload.paper,
           sideIndex,
+          ...(point(payload.from) ? { from: point(payload.from) } : {}),
+          ...(point(payload.to) ? { to: point(payload.to) } : {}),
         });
         sendJson(
           response,
