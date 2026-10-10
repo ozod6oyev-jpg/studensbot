@@ -83,7 +83,7 @@ import {
   wordsOf,
   type SideTextMeasure,
 } from "../src/lib/handwriting/notebook-text";
-import { decodeSampleImage } from "../src/lib/handwriting/image";
+import { decodeSampleImage, shrinkImage } from "../src/lib/handwriting/image";
 import { analyzeSample, mergeProfiles, sampleQuality, type SampleProfile } from "../src/lib/handwriting/sample";
 import {
   MAX_STYLES_PER_CHAT,
@@ -1624,30 +1624,55 @@ async function miniAppPosition(chatId: number, notebook: Notebook): Promise<Mini
   };
 }
 
+/** Namunaning qaysi qadami: 10 ta so'z yoki 10 ta raqam. */
+type SampleStep = "words" | "digits";
+
 /**
- * Mini App'dan kelgan namunani tekshiradi: faqat kutilgan ko'rinishdagi
- * (barcha o'lchovlari son) profil qabul qilinadi — buzilgan yoki begona
- * obyekt bilan `calibrateStyle()` ishlamasligi kerak.
+ * Namunaning eng kam talablari.
+ *
+ * Katak varaqadagi 10 ta raqamda siyoh kam bo'ladi, shuning uchun chegara
+ * qadamga qarab pasaytiriladi. Chatdagi uslub oqimi ham, Mini App'dagi ham shu
+ * bitta qiymatni ishlatadi — aks holda Mini App'da yaroqli namuna rad etilardi.
  */
-function asSampleProfile(raw: unknown): SampleProfile | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const input = raw as Record<string, unknown>;
-  const numbers = [
-    "lines",
-    "inkPixels",
-    "slant",
-    "thickness",
-    "xHeight",
-    "coverage",
-    "aspect",
-    "tracking",
-    "wobble",
-    "density",
-  ];
-  if (!numbers.every((key) => typeof input[key] === "number" && Number.isFinite(input[key] as number))) {
-    return null;
+function sampleQualityOptions(step: SampleStep): { minLines: number; minInk: number } {
+  return { minLines: 1, minInk: step === "words" ? 400 : 150 };
+}
+
+/** Namunani o'qish natijasi: profil yoki foydalanuvchiga aytiladigan sabab. */
+type SampleRead = { ok: true; profile: SampleProfile } | { ok: false; message: string };
+
+/**
+ * Mini App yuborgan namunani (base64 rasm) o'qib, o'lchovlarini hisoblaydi.
+ *
+ * O'lchash botda bajariladi: brauzerda rasm dekodlash uchun kerak bo'ladigan
+ * og'ir kutubxonalar (`node:zlib`) sayt yig'uviga tushib qolmasligi kerak.
+ * Sabab aniq aytiladi: rasm o'qilmadimi yoki o'lchov sifatsizmi — foydalanuvchi
+ * shunga qarab boshqacha harakat qiladi.
+ */
+function readSampleImage(base64: string | undefined, step: SampleStep): SampleRead {
+  if (!base64) {
+    return { ok: false, message: "Namuna surati kelmadi — qaytadan urinib ko'ring." };
   }
-  return raw as SampleProfile;
+  let profile: SampleProfile;
+  try {
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.byteLength === 0) throw new Error("bo'sh surat");
+    profile = analyzeSample(shrinkImage(decodeSampleImage(new Uint8Array(bytes))));
+  } catch {
+    return {
+      ok: false,
+      message: "Surat o'qilmadi — JPEG yoki PNG formatdagi surat yuboring (Telegram'da «rasm sifatida»).",
+    };
+  }
+  const quality = sampleQuality(profile, sampleQualityOptions(step));
+  if (!quality.ok) {
+    const ask = step === "words" ? "10 ta so'zni" : "10 ta raqamni";
+    return {
+      ok: false,
+      message: `${quality.reason ?? "Namuna aniq emas."} ${ask} yozib, varaqni to'liq ko'rinishda qayta suratga oling.`,
+    };
+  }
+  return { ok: true, profile };
 }
 
 /**
@@ -1664,10 +1689,11 @@ async function miniAppStyle(request: MiniAppStyleRequest): Promise<MiniAppStyleR
   const settings = rawSettings(chatId);
 
   if (request.action === "measure") {
-    const words = asSampleProfile(request.words);
-    if (!words) return { ok: false, message: "Namuna o'qilmadi — rasmni qaytadan urinib ko'ring." };
-    const digits = asSampleProfile(request.digits) ?? null;
-    const profile = mergeProfiles(words, digits);
+    const words = readSampleImage(request.wordsImage, "words");
+    if (!words.ok) return { ok: false, message: words.message };
+    // Raqamlar namunasi yaroqsiz bo'lsa — o'lchovga qo'shilmaydi (so'zlar yetarli).
+    const digits = request.digitsImage ? readSampleImage(request.digitsImage, "digits") : null;
+    const profile = mergeProfiles(words.profile, digits && digits.ok ? digits.profile : null);
 
     const fonts = await fontsFor(styleFor(chatId));
     if (Object.keys(fonts).length === 0) {
@@ -3428,10 +3454,7 @@ async function handleStyleSample(chatId: number, fileId: string): Promise<void> 
 
   // Katak varaqadagi 10 ta raqamda siyoh kam bo'ladi, shuning uchun chegara
   // qadamga qarab pasaytiriladi (chiziqlar allaqachon olib tashlangan).
-  const quality = sampleQuality(profile, {
-    minLines: 1,
-    minInk: step === "words" ? 400 : 150,
-  });
+  const quality = sampleQuality(profile, sampleQualityOptions(step));
   if (!quality.ok) {
     await sendMessage(
       chatId,

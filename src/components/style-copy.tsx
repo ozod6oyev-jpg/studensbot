@@ -3,13 +3,7 @@ import { Camera, Check, Loader2, PenLine, Sparkles, Trash2, X } from "lucide-rea
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/form";
-import { decodeSampleImage } from "@/lib/handwriting/image";
-import { analyzeSample, sampleQuality, type SampleProfile } from "@/lib/handwriting/sample";
-import {
-  manageStyle,
-  type MiniAppSampleProfile,
-  type MiniAppStyleInfo,
-} from "@/lib/telegram/mini-app";
+import { manageStyle, type MiniAppStyleInfo } from "@/lib/telegram/mini-app";
 import { cn } from "@/lib/utils";
 
 export interface StyleCopyProps {
@@ -32,28 +26,68 @@ interface Outcome {
 }
 
 /**
- * Namunadagi o'lchovlar — shunchaki sonlar to'plami: botga JSON bo'lib ketadi,
- * shuning uchun indeksli obyektga aylantiramiz (`SampleProfile` — interfeys,
- * u o'zidan indeks imzosini bermaydi).
+ * Namunadagi eng katta tomon. Server ham xuddi shu o'lchamgacha kichraytiradi
+ * (`MAX_SAMPLE_SIDE`), shuning uchun bundan kattaroq surat yuborishdan foyda
+ * yo'q — faqat mobil internetni band qiladi.
  */
-function profilePayload(profile: SampleProfile): MiniAppSampleProfile {
-  const payload: MiniAppSampleProfile = {};
-  for (const [key, value] of Object.entries(profile)) payload[key] = value;
-  return payload;
+const SAMPLE_MAX_SIDE = 1600;
+
+/** Telefon surati uchun chegara: undan kattasi baribir kichraytiriladi. */
+const MAX_PICK_BYTES = 25 * 1024 * 1024;
+
+/** Rasmni JPEG'ga aylantirib, base64 (prefiksisiz) ko'rinishida qaytaradi. */
+async function sampleToBase64(file: File): Promise<string> {
+  if (file.size > MAX_PICK_BYTES) {
+    throw new Error("Surat juda katta — boshqa surat tanlang.");
+  }
+
+  // Rasmni brauzerning o'zi ochadi (HEIC kabi formatlar qo'llab-quvvatlanmasa
+  // shu yerda xato beradi) va kerak bo'lsa kichraytiradi.
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, SAMPLE_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    bitmap.close();
+    throw new Error("Rasmni tayyorlab bo'lmadi — boshqa surat bilan urinib ko'ring.");
+  }
+  context.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/jpeg", 0.9),
+  );
+  if (!blob) throw new Error("Rasmni tayyorlab bo'lmadi — boshqa surat bilan urinib ko'ring.");
+
+  const buffer = new Uint8Array(await blob.arrayBuffer());
+  // base64: katta massivni bo'laklab o'giramiz (`String.fromCharCode` argument
+  // chegarasidan oshib ketmasligi uchun).
+  let binary = "";
+  const chunk = 0x8000;
+  for (let index = 0; index < buffer.length; index += chunk) {
+    binary += String.fromCharCode(...buffer.subarray(index, index + chunk));
+  }
+  return btoa(binary);
 }
 
 /**
  * «Uslubimni nusxalash» — Mini App'ning o'zida.
  *
  * Foydalanuvchi namunani (10 ta so'z, keyin 10 ta raqam) suratga oladi; Studio
- * rasmni shu yerda o'lchab, faqat raqamli profilni botga yuboradi. Eng yaqin
- * qo'lyozmani tanlash va uslubni saqlash ishi botda bajariladi (u yerda shrift
- * fayllari bor), shuning uchun brauzerga shrift yuklanmaydi.
+ * rasmni shu yerda kichraytirib JPEG qilib, botga yuboradi. O'lchash va eng
+ * yaqin qo'lyozmani tanlash botda bajariladi (u yerda shrift fayllari bor),
+ * shuning uchun brauzerga shrift fayllari ham, rasm dekodlash uchun og'ir
+ * kutubxonalar ham yuklanmaydi.
  */
 export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
   const [step, setStep] = useState<Step>("start");
-  const [words, setWords] = useState<SampleProfile | null>(null);
-  const [digits, setDigits] = useState<SampleProfile | null>(null);
+  const [wordsImage, setWordsImage] = useState<string | null>(null);
+  const [digitsImage, setDigitsImage] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [measuring, setMeasuring] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -63,32 +97,22 @@ export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
   const wordsInput = useRef<HTMLInputElement | null>(null);
   const digitsInput = useRef<HTMLInputElement | null>(null);
 
-  /** Rasmni o'lchaydi: o'qilmagan yoki sifatsiz namuna — xato xabari bilan qaytadi. */
-  const measure = async (file: File): Promise<SampleProfile | null> => {
+  /** Suratni tayyorlaydi: o'qilmagan yoki juda katta surat — xato xabari bilan. */
+  const prepare = async (file: File): Promise<string | null> => {
     setMeasuring(true);
     setOutcome(null);
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      // O'lchash sinxron ishlaydi; «o'lchanmoqda…» yozuvi ko'rinib turishi uchun
-      // bitta kadr kutamiz.
+      // Tayyorlash bir necha yuz millisekund oladi; «tayyorlanmoqda…» yozuvi
+      // ko'rinib turishi uchun bitta kadr kutamiz.
       await new Promise((resolve) => setTimeout(resolve, 30));
-      const profile = analyzeSample(decodeSampleImage(bytes));
-      const quality = sampleQuality(profile);
-      if (!quality.ok) {
-        setOutcome({
-          ok: false,
-          message: quality.reason ?? "Namuna yaroqli emas — yozuv aniqroq ko'rinishi kerak.",
-        });
-        return null;
-      }
-      return profile;
+      return await sampleToBase64(file);
     } catch (error) {
       setOutcome({
         ok: false,
         message:
           error instanceof Error
             ? error.message
-            : "Rasm o'qilmadi — boshqa rasm bilan urinib ko'ring.",
+            : "Rasm o'qilmadi — boshqa surat bilan urinib ko'ring.",
       });
       return null;
     } finally {
@@ -98,51 +122,51 @@ export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
 
   const pickWords = async (file: File | undefined) => {
     if (!file) return;
-    const profile = await measure(file);
-    if (!profile) return;
-    setWords(profile);
+    const image = await prepare(file);
+    if (!image) return;
+    setWordsImage(image);
     setStep("digits");
   };
 
   const pickDigits = async (file: File | undefined) => {
     if (!file) return;
-    const profile = await measure(file);
-    if (!profile) return;
-    setDigits(profile);
+    const image = await prepare(file);
+    if (!image) return;
+    setDigitsImage(image);
     setStep("save");
   };
 
   const start = () => {
-    setWords(null);
-    setDigits(null);
+    setWordsImage(null);
+    setDigitsImage(null);
     setName("");
     setOutcome(null);
     setStep("words");
   };
 
   const reset = () => {
-    setWords(null);
-    setDigits(null);
+    setWordsImage(null);
+    setDigitsImage(null);
     setOutcome(null);
     setStep("start");
   };
 
   const save = async () => {
-    if (!words) return;
+    if (!wordsImage) return;
     setSaving(true);
     const trimmed = name.trim();
     const result = await manageStyle({
       action: "measure",
-      words: profilePayload(words),
-      digits: digits ? profilePayload(digits) : null,
+      wordsImage,
+      ...(digitsImage ? { digitsImage } : {}),
       ...(trimmed ? { name: trimmed } : {}),
     });
     setSaving(false);
     setOutcome({ ok: result.ok, message: result.message });
     if (result.ok) {
       setName("");
-      setWords(null);
-      setDigits(null);
+      setWordsImage(null);
+      setDigitsImage(null);
       setStep("start");
       onReload();
     }
@@ -182,6 +206,7 @@ export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
               <li>1-qadam: 10 ta so&apos;zni yo&apos;l-yo&apos;l daftarga yozib suratga olasiz.</li>
               <li>2-qadam: 10 ta raqamni katak daftarga yozasiz (o&apos;tkazib yuborish ham mumkin).</li>
               <li>Yozuv butun varaqada, soyasiz va aniq ko&apos;rinishi kerak.</li>
+              <li>Surat o&apos;lchash uchun botga yuboriladi; uslub chatda saqlanadi.</li>
             </ul>
             <Button variant="marker" size="sm" disabled={working} onClick={start}>
               <PenLine className="h-4 w-4" />
@@ -215,8 +240,8 @@ export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
         {step === "digits" && (
           <div className="space-y-2 rounded-xl border border-marker/40 bg-marker-soft/20 p-3">
             <p className="text-xs leading-relaxed text-pencil/80">
-              So&apos;zlar o&apos;lchandi{words ? ` (${words.lines} satr topildi)` : ""}. 2-qadam:
-              10 ta raqam yozilgan varaqani suratga oling yoki raqamlarsiz davom eting.
+              So&apos;zlar surati tayyor. 2-qadam: 10 ta raqam yozilgan varaqani suratga oling
+              yoki raqamlarsiz davom eting.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button
@@ -238,9 +263,9 @@ export function StyleCopy({ styles, styleId, busy, onReload }: StyleCopyProps) {
         {step === "save" && (
           <div className="space-y-3 rounded-xl border border-marker/40 bg-marker-soft/20 p-3">
             <p className="text-xs leading-relaxed text-pencil/80">
-              Namuna tayyor{words ? ` (${words.lines} satr)` : ""}
-              {digits ? " — raqamlar ham hisobga olindi" : " — raqamlar namunasiz"}. Endi uslubga
-              nom bering.
+              Namuna tayyor
+              {digitsImage ? " — raqamlar ham hisobga olinadi" : " — raqamlar namunasiz"}. Endi
+              uslubga nom bering va saqlang: o&apos;lchash shu yerda boshlanadi.
             </p>
             <div>
               <Label>Uslub nomi (ixtiyoriy)</Label>

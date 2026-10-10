@@ -751,22 +751,20 @@ export async function manageNotebook(
 /**
  * Mini App'dan chaqiriladigan uslub amali.
  *
- * `measure` — namunadan o'lchangan profil yuboriladi va bot uni o'z shrift
+ * `measure` — namuna suratlari yuboriladi va bot ularni o'lchab, o'z shrift
  * fayllari bilan solishtirib, eng yaqin qo'lyozmani tanlab, shaxsiy uslub
- * yasaydi (o'lchash ishi to'liq serverda — brauzerda shrift fayllari kerak
- * bo'lmaydi). `apply` — saqlangan uslubni yoqish, `remove` — o'chirish.
+ * yasaydi (o'lchash ishi to'liq serverda — brauzerda shrift fayllari ham,
+ * rasm dekodlash uchun `node:zlib` ham kerak bo'lmaydi).
+ * `apply` — saqlangan uslubni yoqish, `remove` — o'chirish.
  */
 export type MiniAppStyleAction = "measure" | "apply" | "remove";
 
-/** `measure` uchun namunadan hisoblangan profil (sonlar, `SampleProfile`). */
-export type MiniAppSampleProfile = Record<string, unknown>;
-
 export interface MiniAppStylePayload {
   action: MiniAppStyleAction;
-  /** `measure`: so'zlardan hisoblangan profil. */
-  words?: MiniAppSampleProfile;
-  /** `measure`: raqamlardan hisoblangan profil (ixtiyoriy). */
-  digits?: MiniAppSampleProfile | null;
+  /** `measure`: so'zlar namunasi — JPEG baytlari base64'da (`data:` prefiksisiz). */
+  wordsImage?: string;
+  /** `measure`: raqamlar namunasi (ixtiyoriy), xuddi shunday base64 JPEG. */
+  digitsImage?: string | null;
   /** `measure`: uslub nomi (bo'sh bo'lsa — standart nom). */
   name?: string;
   /** `apply`/`remove`: qaysi uslub. */
@@ -806,8 +804,8 @@ export async function manageStyle(payload: MiniAppStylePayload): Promise<MiniApp
       body: JSON.stringify({
         initData,
         action: payload.action,
-        ...(payload.words ? { words: payload.words } : {}),
-        ...(payload.digits ? { digits: payload.digits } : {}),
+        ...(payload.wordsImage ? { wordsImage: payload.wordsImage } : {}),
+        ...(payload.digitsImage ? { digitsImage: payload.digitsImage } : {}),
         ...(payload.name ? { name: payload.name } : {}),
         ...(payload.styleId ? { styleId: payload.styleId } : {}),
       }),

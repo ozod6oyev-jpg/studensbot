@@ -53,8 +53,18 @@ export const MINI_APP_STYLE_ACTIONS: MiniAppStyleAction[] = ["measure", "apply",
 export const HEALTH_PATH = "/healthz";
 /** `initData` shu vaqtdan eski bo'lsa qabul qilinmaydi (o'g'irlangan ma'lumot uchun). */
 export const MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60;
-/** So'rov tanasining eng katta hajmi (rasm yuborilmaydi, faqat matn). */
+/**
+ * Odatdagi (matnli) so'rov tanasining eng katta hajmi. Namuna suratlari bor
+ * uslub so'rovi uchun alohida, kattaroq chegara ishlatiladi
+ * (`MAX_STYLE_BODY_BYTES`).
+ */
 const MAX_BODY_BYTES = 256 * 1024;
+/**
+ * Uslub so'rovi namuna suratlarini (base64) olib keladi, shuning uchun odatdagi
+ * matn chegarasidan ancha katta: brauzer suratni avval kichraytirib yuboradi,
+ * lekin telefon suratining base64 ko'rinishi baribir bir necha yuz kilobayt.
+ */
+export const MAX_STYLE_BODY_BYTES = 12 * 1024 * 1024;
 /**
  * Bitta so'rovda yuboriladigan eng ko'p belgi.
  *
@@ -224,19 +234,19 @@ export interface MiniAppPoint {
 /**
  * `POST /mini-app/style` so'rovi — shaxsiy uslub (uslubni nusxalash).
  *
- * O'lchash ishi botda bajariladi: Mini App namunadan faqat raqamli profilni
- * (sonlar) yuboradi, bot esa o'z shrift fayllari bilan solishtirib, eng yaqin
+ * O'lchash ishi botda bajariladi: Mini App namuna suratlarini (base64 JPEG)
+ * yuboradi, bot esa o'lchab, o'z shrift fayllari bilan solishtirib, eng yaqin
  * qo'lyozmani tanlaydi va uslubni saqlaydi — shunda brauzerga shrift fayllarini
- * yuklash shart bo'lmaydi.
+ * ham, rasm dekodlash uchun og'ir kutubxonalarni ham yuklash shart bo'lmaydi.
  */
 export interface MiniAppStyleRequest {
   chatId: number;
   user?: MiniAppUser;
   action: MiniAppStyleAction;
-  /** `measure`: so'zlar namunasidan hisoblangan profil (tekshirish chaqiruvchi tomonda). */
-  words?: unknown;
-  /** `measure`: raqamlar namunasidan hisoblangan profil. */
-  digits?: unknown;
+  /** `measure`: so'zlar namunasi — base64 (prefiksisiz) JPEG baytlari. */
+  wordsImage?: string;
+  /** `measure`: raqamlar namunasi — xuddi shunday base64 JPEG. */
+  digitsImage?: string;
   /** `measure`: uslub nomi (bo'sh bo'lsa — bot o'zi nom beradi). */
   name?: string;
   /** `apply`/`remove`: qaysi saqlangan uslub. */
@@ -484,15 +494,16 @@ export function createMiniAppHandler(
       paper?: unknown;
       sideIndex?: unknown;
       spreadIndex?: unknown;
-      words?: unknown;
-      digits?: unknown;
+      wordsImage?: unknown;
+      digitsImage?: unknown;
       styleId?: unknown;
       name?: unknown;
       from?: unknown;
       to?: unknown;
     };
     try {
-      const raw = await readBody(request);
+      // Uslub so'rovida namuna suratlari keladi — chegara kattaroq.
+      const raw = await readBody(request, isStyle ? MAX_STYLE_BODY_BYTES : MAX_BODY_BYTES);
       payload = JSON.parse(raw || "{}") as typeof payload;
     } catch (error) {
       sendJson(response, 400, { ok: false, error: (error as Error).message }, cors);
@@ -586,8 +597,8 @@ export function createMiniAppHandler(
           chatId,
           user: check.user,
           action: action as MiniAppStyleAction,
-          ...(payload.words ? { words: payload.words } : {}),
-          ...(payload.digits ? { digits: payload.digits } : {}),
+          ...(typeof payload.wordsImage === "string" ? { wordsImage: payload.wordsImage } : {}),
+          ...(typeof payload.digitsImage === "string" ? { digitsImage: payload.digitsImage } : {}),
           ...(name ? { name } : {}),
           ...(styleId ? { styleId } : {}),
         });

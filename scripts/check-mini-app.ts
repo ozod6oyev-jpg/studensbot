@@ -33,7 +33,17 @@
  *       sozlamalardan ham) olib tashlaydi, `undo` oxirgi yozuvni qaytaradi;
  *     · `book` yozilgan betlarni PDF qilib chatga yuboradi;
  *     · faqat shu chatning daftari ustida ishlaydi: begona id, noma'lum amal,
- *       `initData`siz yoki GET so'rov rad etiladi.
+ *       `initData`siz yoki GET so'rov rad etiladi;
+ *     · `deleteRange` tanlangan oraliqni (bet/qator/so'z) o'chiradi va ketgan
+ *       so'zlar sonini aytadi, `undo` esa matnni avvalgi holatiga qaytaradi;
+ *       teskari (tugashi boshidan oldin) yoki yaroqsiz oraliq o'chirmaydi;
+ *  5. `POST /mini-app/style` — «uslubimni nusxalash» Mini App'dan:
+ *     · namuna surati base64 JPEG bo'lib keladi, bot uni o'zi o'lchaydi va
+ *       eng yaqin qo'lyozmani tanlab, uslubni saqlab darhol yoqadi (holatda
+ *       uslub ro'yxati va yoqilgan uslub ko'rinadi);
+ *     · surat bo'lmagan (yoki umuman yuborilmagan) namuna, eski — faqat
+ *       raqamli profil yuboradigan so'rov va noma'lum amal uslub yaratmaydi;
+ *       `initData`siz so'rov va GET rad etiladi.
  *
  * Telegram'ning o'zi kerak emas: mock API `getUpdates`, `setChatMenuButton`,
  * `sendMessage`, `sendPhoto` va `sendDocument` ni bajaradi.
@@ -52,10 +62,12 @@ import {
   MINI_APP_NOTEBOOK_PATH,
   MINI_APP_PATH,
   MINI_APP_STATE_PATH,
+  MINI_APP_STYLE_PATH,
   originFromUrl,
   parseInitData,
   verifyInitData,
 } from "../bot/mini-app";
+import { samplePhoto } from "./sample-photo";
 
 const BOT_ENTRY = fileURLToPath(new URL("../bot/index.ts", import.meta.url));
 /** Mock Telegram API'da ham, `initData` imzosida ham shu token ishlatiladi. */
@@ -69,6 +81,10 @@ const NOTEBOOK_ID = "nbsinov1";
 const NOTEBOOK_TITLE = "Sinov daftari";
 /** Betdagi tayyor matn — qatordan yozishni tekshirish uchun. */
 const SIDE_TEXT = "Birinchi qator allaqachon yozilgan.";
+/** Oraliqni o'chirish sinovidan oldin 1-betga yoziladigan matn. */
+const RANGE_TEXT = "Oraliq sinovi uchun yozilgan matn.";
+/** Namunadagi so'zlar (botdagi ro'yxat bilan bir xil) — uslubni nusxalash uchun. */
+const SAMPLE_WORDS = "salom maktab daftar kitob qalam yozuv o'qituvchi do'stlik quyosh bahor";
 /** Telegram WebApp `initData` ichidagi foydalanuvchi. */
 const USER = { id: CHAT_ID, first_name: "Aziz", username: "aziz" };
 
@@ -361,6 +377,9 @@ interface StateResponse {
     activeId?: string | null;
     side?: StateSide | null;
     style?: unknown;
+    /** Saqlangan shaxsiy uslublar (uslubni nusxalash) va yoqilgani. */
+    styles?: { id: string; name: string; baseFont?: string; active?: boolean }[];
+    styleId?: string | null;
   };
 }
 
@@ -410,6 +429,11 @@ async function postNotebook(
     title?: string;
     sheets?: number;
     paper?: string;
+    /** `clearSide` uchun bet indeksi (0 dan boshlanadi). */
+    sideIndex?: number;
+    /** `deleteRange` uchun oraliq chegaralari (1 dan boshlanadigan qator/so'z). */
+    from?: { side: number; line: number; word: number };
+    to?: { side: number; line: number; word: number };
   },
   origin: string | null = ORIGIN,
 ): Promise<NotebookResponse> {
@@ -425,6 +449,58 @@ async function postNotebook(
   let body: NotebookResponse["body"] = {};
   try {
     body = JSON.parse(text) as NotebookResponse["body"];
+  } catch {
+    body = { error: text.slice(0, 120) };
+  }
+  return { status: response.status, headers: response.headers, body };
+}
+
+interface StyleResponse {
+  status: number;
+  headers: { get(name: string): string | null };
+  body: {
+    ok?: boolean;
+    message?: string;
+    error?: string;
+    styleId?: string | null;
+    name?: string | null;
+    baseFont?: string | null;
+    summary?: string | null;
+  };
+}
+
+/**
+ * `POST /mini-app/style` ga so'rov yuboradi (uslubni nusxalash).
+ *
+ * `wordsImage`/`digitsImage` — namunaning base64 (prefiksisiz) JPEG baytlari;
+ * `words` maydoni ataylab qo'llab-quvvatlanadi — eski (raqamli profil yuboradigan)
+ * shartnoma endi uslub yaratmasligini shu bilan tekshiramiz.
+ */
+async function postStyle(
+  port: number,
+  payload: {
+    initData?: string;
+    action?: string;
+    wordsImage?: string;
+    digitsImage?: string;
+    name?: string;
+    styleId?: string;
+    words?: Record<string, unknown>;
+  },
+  origin: string | null = ORIGIN,
+): Promise<StyleResponse> {
+  const response = await fetch(`http://127.0.0.1:${port}${MINI_APP_STYLE_PATH}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(origin ? { origin } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+  const text = await response.text();
+  let body: StyleResponse["body"] = {};
+  try {
+    body = JSON.parse(text) as StyleResponse["body"];
   } catch {
     body = { error: text.slice(0, 120) };
   }
@@ -1081,6 +1157,204 @@ async function main(): Promise<void> {
       notebookPreflight.status === 204 &&
         notebookPreflight.headers.get("access-control-allow-origin") === ORIGIN,
       "daftar amali uchun OPTIONS preflight 204 va CORS ruxsati bilan javob berdi",
+    );
+
+    // --- Oraliqni o'chirish (deleteRange) ----------------------------
+    console.log("\n=== 4-qism: Mini App'dan oraliqni o'chirish (deleteRange) ===");
+
+    // Oldingi bo'limlar boshqa daftarlarni to'ldirib qo'ygan: holat so'rovi
+    // keyingi yoziladigan betni ko'rsatadi, shuning uchun oraliq sinovi o'z
+    // daftarida — 1-betga aniq matn yozib — bajariladi.
+    const rangeBook = await postNotebook(apiPort, {
+      initData,
+      action: "create",
+      title: "Oraliq sinovi",
+      sheets: 12,
+    });
+    const rangeId = rangeBook.body.notebookId ?? "";
+    assert(
+      rangeBook.status === 200 && rangeBook.body.ok === true && rangeId.length > 0,
+      `oraliq sinovi uchun daftar yaratildi (${rangeBook.status}: "${rangeBook.body.message}")`,
+    );
+    await postSend(apiPort, {
+      initData,
+      text: RANGE_TEXT,
+      notebookId: rangeId,
+      startLine: 1,
+    });
+
+    const rangeBefore = await postState(apiPort, { initData, notebookId: rangeId });
+    const rangeTextBefore = rangeBefore.body.side?.text ?? "";
+    const beforeWords = rangeTextBefore.split(/\s+/).filter((word) => word.length > 0);
+    assert(
+      beforeWords.length >= 3,
+      `yangi daftarning birinchi betida yozuv bor (${beforeWords.length} so'z)`,
+    );
+    // Yozuv aynan qaysi betga tushgani holatdan olinadi (yozuvdan keyin u
+    // «keyingi» bet bo'lib qoladi) — taxmin qilinmaydi.
+    const rangeSide = rangeBefore.body.side?.sideIndex ?? 0;
+
+    // 1-qatorning 1–2-so'zi: matnning eng boshidagi ikkita so'z o'chishi kerak.
+    const rangeDeleted = await postNotebook(apiPort, {
+      initData,
+      action: "deleteRange",
+      notebookId: rangeId,
+      from: { side: rangeSide, line: 1, word: 1 },
+      to: { side: rangeSide, line: 1, word: 2 },
+    });
+    assert(
+      rangeDeleted.status === 200 && rangeDeleted.body.ok === true,
+      `oraliq o'chirildi (${rangeDeleted.status}: "${rangeDeleted.body.message}")`,
+    );
+    assert(
+      (rangeDeleted.body.message ?? "").includes("so'z o'chirildi") &&
+        (rangeDeleted.body.message ?? "").includes("qaytarish mumkin"),
+      `xabar o'chirilgan so'zlar va ↩️ imkoniyatini aytdi ("${rangeDeleted.body.message}")`,
+    );
+
+    const rangeAfter = await postState(apiPort, { initData, notebookId: rangeId });
+    const rangeTextAfter = rangeAfter.body.side?.text ?? "";
+    const afterWords = rangeTextAfter.split(/\s+/).filter((word) => word.length > 0);
+    assert(
+      afterWords.length === beforeWords.length - 2,
+      `betdagi matn haqiqatan qisqardi (${beforeWords.length} → ${afterWords.length} so'z)`,
+    );
+    assert(
+      afterWords.join(" ") === beforeWords.slice(2).join(" "),
+      `aynan boshidagi ikki so'z o'chdi, qolgan matn joyida ("${rangeTextAfter.trim().slice(0, 40)}")`,
+    );
+
+    const rangeUndo = await postNotebook(apiPort, { initData, action: "undo", notebookId: rangeId });
+    assert(
+      rangeUndo.status === 200 &&
+        rangeUndo.body.ok === true &&
+        (rangeUndo.body.message ?? "").includes("orqaga qaytarildi"),
+      `o'chirilgan oraliq ↩️ bilan qaytarildi ("${rangeUndo.body.message}")`,
+    );
+    const rangeRestored = await postState(apiPort, { initData, notebookId: rangeId });
+    assert(
+      rangeRestored.body.side?.text === rangeTextBefore,
+      `bet matni avvalgi holatiga qaytdi (${rangeRestored.body.side?.usedLines} qator band)`,
+    );
+
+    // Teskari oraliq (tugashi boshidan oldin) hech narsani o'chirmaydi.
+    const backwards = await postNotebook(apiPort, {
+      initData,
+      action: "deleteRange",
+      notebookId: rangeId,
+      from: { side: rangeSide, line: 2, word: 1 },
+      to: { side: rangeSide, line: 1, word: 1 },
+    });
+    assert(
+      backwards.status === 400 &&
+        backwards.body.ok === false &&
+        (backwards.body.message ?? "").includes("oldin"),
+      `teskari oraliq rad etildi (${backwards.status}: "${backwards.body.message}")`,
+    );
+
+    // Yaroqsiz nuqta (so'z 0 dan boshlanadi) — ham rad etiladi.
+    const badPoint = await postNotebook(apiPort, {
+      initData,
+      action: "deleteRange",
+      notebookId: rangeId,
+      from: { side: rangeSide, line: 1, word: 0 },
+      to: { side: rangeSide, line: 1, word: 1 },
+    });
+    assert(
+      badPoint.status === 400 &&
+        badPoint.body.ok === false &&
+        (badPoint.body.message ?? "").includes("noto'g'ri"),
+      `yaroqsiz oraliq nuqtasi rad etildi (${badPoint.status}: "${badPoint.body.message}")`,
+    );
+
+    const rangeUntouched = await postState(apiPort, { initData, notebookId: rangeId });
+    assert(
+      rangeUntouched.body.side?.text === rangeTextBefore,
+      "rad etilgan oraliqlardan keyin matn o'zgarmadi",
+    );
+
+    // --- Uslubni nusxalash: namuna surati botda o'lchanadi ----------------
+    console.log("\n=== 5-qism: uslubni nusxalash (/mini-app/style) ===");
+
+    const styleCountBefore = (await postState(apiPort, { initData })).body.styles?.length ?? 0;
+    // Foydalanuvchi surati o'rnida haqiqiy qo'lyozma chizib, JPEG qilib yuboramiz.
+    const wordsSample = (
+      await samplePhoto(SAMPLE_WORDS, { paper: "lined", marginLine: true, lineGap: 70 })
+    ).toString("base64");
+
+    const styleSaved = await postStyle(apiPort, {
+      initData,
+      action: "measure",
+      wordsImage: wordsSample,
+      name: "Sinov uslubi",
+    });
+    assert(
+      styleSaved.status === 200 && styleSaved.body.ok === true,
+      `namuna surati botda o'lchandi, uslub saqlandi (${styleSaved.status}: "${styleSaved.body.message}")`,
+    );
+    assert(
+      (styleSaved.body.styleId ?? "").length > 0 &&
+        styleSaved.body.name === "Sinov uslubi" &&
+        (styleSaved.body.baseFont ?? "").length > 0,
+      `javobda uslub id'si, nomi va asos shrift qaytdi (${styleSaved.body.styleId}, «${styleSaved.body.name}», ${styleSaved.body.baseFont})`,
+    );
+
+    const styleState = await postState(apiPort, { initData });
+    const styleEntry = styleState.body.styles?.find((entry) => entry.id === styleSaved.body.styleId);
+    assert(
+      (styleState.body.styles?.length ?? 0) === styleCountBefore + 1 &&
+        styleEntry?.name === "Sinov uslubi" &&
+        styleEntry?.active === true &&
+        styleState.body.styleId === styleSaved.body.styleId,
+      `saqlangan uslub darhol yoqildi va holatda ko'rindi (${styleState.body.styles?.length} ta uslub, active=${styleEntry?.active})`,
+    );
+
+    // Surat bo'lmagan namuna: o'lchab bo'lmaydi — uslub yaratilmaydi.
+    const notImage = await postStyle(apiPort, {
+      initData,
+      action: "measure",
+      wordsImage: Buffer.from("bu rasm emas, oddiy matn").toString("base64"),
+    });
+    assert(
+      notImage.status === 400 &&
+        notImage.body.ok === false &&
+        (notImage.body.message ?? "").length > 0,
+      `rasm bo'lmagan namuna rad etildi (${notImage.status}: "${notImage.body.message}")`,
+    );
+
+    const noImage = await postStyle(apiPort, { initData, action: "measure" });
+    assert(
+      noImage.status === 400 && noImage.body.ok === false,
+      `namunasiz o'lchash rad etildi (${noImage.status}: "${noImage.body.message}")`,
+    );
+
+    // Eski shartnoma: faqat raqamli profil yuborilgan so'rov endi o'lchanmaydi.
+    const oldContract = await postStyle(apiPort, {
+      initData,
+      action: "measure",
+      words: { lines: 3, inkPixels: 1200, slant: 0.1 },
+      name: "Eski shartnoma",
+    });
+    assert(
+      oldContract.status === 400 && oldContract.body.ok === false,
+      `raqamli profil yuboradigan eski so'rov uslub yaratmadi (${oldContract.status})`,
+    );
+
+    const styleUnknownAction = await postStyle(apiPort, { initData, action: "boshqa-amal" });
+    assert(
+      styleUnknownAction.status === 400 && styleUnknownAction.body.ok === false,
+      `noma'lum uslub amali rad etildi (${styleUnknownAction.status}: "${styleUnknownAction.body.error}")`,
+    );
+
+    const styleNoInit = await postStyle(apiPort, { action: "measure", wordsImage: wordsSample });
+    assert(styleNoInit.status === 401, `initData'siz uslub so'rovi 401 (${styleNoInit.status})`);
+    const styleGet = await fetch(`http://127.0.0.1:${apiPort}${MINI_APP_STYLE_PATH}`);
+    assert(styleGet.status === 405, `GET ${MINI_APP_STYLE_PATH} → 405 (${styleGet.status})`);
+
+    const stylesAfterRejects = await postState(apiPort, { initData });
+    assert(
+      (stylesAfterRejects.body.styles?.length ?? 0) === styleCountBefore + 1,
+      `rad etilgan so'rovlar yangi uslub qo'shmadi (${stylesAfterRejects.body.styles?.length} ta qoldi)`,
     );
   } finally {
     child.kill();

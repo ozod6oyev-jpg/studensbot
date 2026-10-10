@@ -24,17 +24,13 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import jpeg from "jpeg-js";
 import { PNG } from "pngjs";
-import { renderNotebook } from "../src/lib/handwriting/render";
-import { FALLBACK_FONT_ID, fontEntry } from "../src/lib/handwriting/fonts.generated";
 import { fontDisplayName } from "../src/lib/handwriting/names";
-import type { NotebookStyle } from "../src/lib/handwriting/types";
+import { samplePhoto } from "./sample-photo";
 
 import { studioText } from "../bot/index";
 
 const BOT_ENTRY = fileURLToPath(new URL("../bot/index.ts", import.meta.url));
-const FONT_DIR = new URL("../src/assets/fonts/", import.meta.url);
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const TEST_CHAT_ID = 4242;
 /** Ikkinchi "foydalanuvchi" — shaxsiy uslub unga ko'rinmasligi kerak. */
@@ -44,31 +40,6 @@ const OTHER_CHAT_ID = 7777;
 const SAMPLE_WORDS = "salom maktab daftar kitob qalam yozuv o'qituvchi do'stlik quyosh bahor";
 /** Namunada yoziladigan raqamlar. */
 const SAMPLE_DIGITS = "0 1 2 3 4 5 6 7 8 9";
-
-/**
- * Foydalanuvchi surati o'rnida namunaviy varaqa chizib, JPEG qilib qaytaradi.
- * Telegram'ga yuborilgan haqiqiy surat ham qayta kodlanadi, shuning uchun
- * JPEG bosqichi o'lchovga xalaqit bermaydi.
- */
-async function samplePhoto(text: string, style: Partial<NotebookStyle>): Promise<Buffer> {
-  const fonts: Record<string, Uint8Array> = {};
-  for (const id of ["caveat", FALLBACK_FONT_ID]) {
-    const entry = fontEntry(id);
-    if (!entry) throw new Error(`"${id}" shrifti manifestda yo'q`);
-    fonts[id] = new Uint8Array(await readFile(new URL(entry.file, FONT_DIR)));
-  }
-  const result = await renderNotebook({
-    text,
-    style: { font: "caveat", seed: 21, wobble: 0.4, fontSize: 40, ...style },
-    fonts,
-  });
-  const page = result.pages[0];
-  const encoded = jpeg.encode(
-    { data: Buffer.from(page.rgba.buffer, page.rgba.byteOffset, page.rgba.byteLength), width: page.width, height: page.height },
-    82,
-  );
-  return Buffer.from(encoded.data);
-}
 
 /** Pastdagi menyu tugmalari (bot bilan bir xil matnlar). */
 const  BTN = {
